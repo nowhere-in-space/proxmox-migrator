@@ -1,0 +1,886 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtual Machines - {{ cluster.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container">
+            <a class="navbar-brand" href="/">Proxmox VM Migrator</a>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <h2>Virtual Machines on {{ cluster.name }}</h2>
+        
+        {% if vms %}
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>
+                                <a href="{{ url_for('list_vms', cluster_id=cluster.id, sort='vmid', dir='asc' if current_sort != 'vmid' or current_dir == 'desc' else 'desc') }}" class="text-dark text-decoration-none">
+                                    VMID
+                                    {% if current_sort == 'vmid' %}
+                                        <i class="bi bi-arrow-{{ 'down' if current_dir == 'asc' else 'up' }}"></i>
+                                    {% endif %}
+                                </a>
+                            </th>
+                            <th>
+                                <a href="{{ url_for('list_vms', cluster_id=cluster.id, sort='name', dir='asc' if current_sort != 'name' or current_dir == 'desc' else 'desc') }}" class="text-dark text-decoration-none">
+                                    Name
+                                    {% if current_sort == 'name' %}
+                                        <i class="bi bi-arrow-{{ 'down' if current_dir == 'asc' else 'up' }}"></i>
+                                    {% endif %}
+                                </a>
+                            </th>
+                            <th>Status</th>
+                            <th>
+                                <a href="{{ url_for('list_vms', cluster_id=cluster.id, sort='node', dir='asc' if current_sort != 'node' or current_dir == 'desc' else 'desc') }}" class="text-dark text-decoration-none">
+                                    Node
+                                    {% if current_sort == 'node' %}
+                                        <i class="bi bi-arrow-{{ 'down' if current_dir == 'asc' else 'up' }}"></i>
+                                    {% endif %}
+                                </a>
+                            </th>
+                            <th>
+                                <a href="{{ url_for('list_vms', cluster_id=cluster.id, sort='memory', dir='asc' if current_sort != 'memory' or current_dir == 'desc' else 'desc') }}" class="text-dark text-decoration-none">
+                                    Memory (MB)
+                                    {% if current_sort == 'memory' %}
+                                        <i class="bi bi-arrow-{{ 'down' if current_dir == 'asc' else 'up' }}"></i>
+                                    {% endif %}
+                                </a>
+                            </th>
+                            <th>
+                                <a href="{{ url_for('list_vms', cluster_id=cluster.id, sort='cores', dir='asc' if current_sort != 'cores' or current_dir == 'desc' else 'desc') }}" class="text-dark text-decoration-none">
+                                    Cores
+                                    {% if current_sort == 'cores' %}
+                                        <i class="bi bi-arrow-{{ 'down' if current_dir == 'asc' else 'up' }}"></i>
+                                    {% endif %}
+                                </a>
+                            </th>
+                            <th>Disks</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for vm in vms %}
+                            <tr>
+                                <td>{{ vm.vmid }}</td>
+                                <td>{{ vm.name }}</td>
+                                <td>
+                                    <span class="badge {% if vm.status == 'running' %}bg-success{% else %}bg-secondary{% endif %}">
+                                        {{ vm.status }}
+                                    </span>
+                                </td>
+                                <td>{{ vm.node }}</td>
+                                <td>{{ vm.memory }}</td>
+                                <td>{{ vm.cores }}</td>
+                                <td>
+                                    {% for disk in vm.disks %}
+                                        <div>{{ disk.device }}: {{ disk.path }}</div>
+                                    {% endfor %}
+                                </td>
+                                <td>
+                                    <button class="btn btn-primary btn-sm" onclick="showMigrationModal('{{ vm.vmid }}', '{{ vm.node }}')">
+                                        Migrate
+                                    </button>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <p>No virtual machines found on this cluster.</p>
+        {% endif %}
+    </div>
+
+    <!-- Migration Modal -->
+    <div class="modal fade" id="migrationModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Migrate Virtual Machine</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="migrationForm">
+                        <input type="hidden" id="sourceClusterId" value="{{ cluster.id }}">
+                        <input type="hidden" id="vmId">
+                        <input type="hidden" id="sourceNode">
+                        
+                        <div class="mb-3">
+                            <label for="destCluster" class="form-label">Destination Cluster</label>
+                            <select class="form-select" id="destCluster" required>
+                                <option value="">Select destination cluster...</option>
+                                {% for dest_cluster in dest_clusters %}
+                                    <option value="{{ dest_cluster.id }}">{{ dest_cluster.name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="destNode" class="form-label">Destination Node</label>
+                            <select class="form-select" id="destNode" required>
+                                <option value="">Select destination node...</option>
+                            </select>
+                            <small class="form-text text-muted">Loading nodes...</small>
+                        </div>
+                        
+                        <!-- Storage Mapping Section -->
+                        <div class="mb-3" id="storageMappingSection" style="display: none;">
+                            <label class="form-label">Storage Mapping</label>
+                            <div class="alert alert-info">
+                                <small>Map source VM disks to destination storage pools</small>
+                            </div>
+                            <div id="storageMappingContainer">
+                                <!-- Storage mappings will be dynamically added here -->
+                            </div>
+                        </div>
+                        
+                        <!-- Network Mapping Section -->
+                        <div class="mb-3" id="networkMappingSection" style="display: none;">
+                            <label class="form-label">Network Interface Mapping</label>
+                            <div class="alert alert-info">
+                                <small>Map source VM network interfaces to destination bridges</small>
+                            </div>
+                            <div id="networkMappingContainer">
+                                <!-- Network mappings will be dynamically added here -->
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <div class="row">
+                                <div class="col">
+                                    <div class="card">
+                                        <div class="card-body">
+                                            <h6 class="card-subtitle mb-2 text-muted">Selected Node Info</h6>
+                                            <div id="nodeInfo">
+                                                <p class="mb-1">Status: <span id="nodeStatus">-</span></p>
+                                                <p class="mb-1">CPU: <span id="nodeCpu">-</span></p>
+                                                <p class="mb-0">Memory: <span id="nodeMemory">-</span></p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" id="deleteSource">
+                            <label class="form-check-label" for="deleteSource">Delete VM from source after migration</label>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-body" id="migrationProgress" style="display: none;">
+                    <div class="row">
+                        <div class="col-md-12">
+                            <h6 class="mb-3">Migration Progress</h6>
+                            
+                            <!-- Main Progress Bar -->
+                            <div class="progress mb-3" style="height: 25px;">
+                                <div class="progress-bar progress-bar-striped progress-bar-animated" 
+                                     id="migrationProgressBar" 
+                                     role="progressbar" 
+                                     style="width: 0%"
+                                     aria-valuenow="0" 
+                                     aria-valuemin="0" 
+                                     aria-valuemax="100">
+                                    0%
+                                </div>
+                            </div>
+                            
+                            <!-- Disk Transfer Progress Bar -->
+                            <div id="diskTransferProgress" style="display: none;">
+                                <h6 class="mb-2">
+                                    <span id="diskTransferTitle">Disk Transfer</span>
+                                    <small class="text-muted" id="diskTransferStats"></small>
+                                </h6>
+                                <div class="progress mb-3" style="height: 20px;">
+                                    <div class="progress-bar bg-info progress-bar-striped progress-bar-animated" 
+                                         id="diskTransferProgressBar" 
+                                         role="progressbar" 
+                                         style="width: 0%"
+                                         aria-valuenow="0" 
+                                         aria-valuemin="0" 
+                                         aria-valuemax="100">
+                                        0%
+                                    </div>
+                                </div>
+                                <div class="d-flex justify-content-between text-muted small">
+                                    <span id="diskTransferSpeed"></span>
+                                    <span id="diskTransferEta"></span>
+                                </div>
+                            </div>
+                            
+                            <!-- Current Status -->
+                            <div class="alert alert-info mb-3">
+                                <strong>Current Step:</strong> <span id="currentStep">Initializing...</span><br>
+                                <span id="currentMessage">Starting migration process...</span>
+                            </div>
+                            
+                            <!-- VMID Info -->
+                            <div class="alert alert-light mb-3" id="vmidInfo" style="display: none;">
+                                <strong>VM ID:</strong> <span id="migrationVmid">-</span>
+                            </div>
+                            
+                            <!-- Activity Log -->
+                            <div class="card">
+                                <div class="card-header">
+                                    <h6 class="mb-0">Activity Log</h6>
+                                </div>
+                                <div class="card-body" style="max-height: 200px; overflow-y: auto;">
+                                    <div id="migrationLog">
+                                        <div class="text-muted">Migration log will appear here...</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-warning" id="testMigrationBtn" onclick="testMigration()">Test Migration UI</button>
+                    <button type="button" class="btn btn-primary" id="startMigrationBtn" onclick="startMigration()" disabled>Start Migration</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let migrationModal;
+        let clusterResources = {};
+        
+        document.addEventListener('DOMContentLoaded', function() {
+            migrationModal = new bootstrap.Modal(document.getElementById('migrationModal'));
+            
+            // Add event listeners for destination cluster selection
+            document.getElementById('destCluster').addEventListener('change', function(e) {
+                const clusterId = e.target.value;
+                if (clusterId) {
+                    loadClusterResources(clusterId);
+                } else {
+                    resetResourceSelects();
+                }
+            });
+            
+            // Add event listeners for node selection
+            document.getElementById('destNode').addEventListener('change', function(e) {
+                updateNodeInfo(e.target.value);
+            });
+        });
+        
+        function validateMigrationForm() {
+            const destCluster = document.getElementById('destCluster').value;
+            const destNode = document.getElementById('destNode').value;
+            const startButton = document.getElementById('startMigrationBtn');
+            
+            // Check if all storage mappings are filled
+            let allStoragesMapped = true;
+            const storageSelects = document.querySelectorAll('.storage-mapping');
+            storageSelects.forEach(select => {
+                if (!select.value) {
+                    allStoragesMapped = false;
+                }
+            });
+            
+            // Check if all network mappings are filled
+            let allNetworksMapped = true;
+            const networkSelects = document.querySelectorAll('.network-mapping');
+            networkSelects.forEach(select => {
+                if (!select.value) {
+                    allNetworksMapped = false;
+                }
+            });
+            
+            // Enable button only if cluster, node are selected and all mappings are filled
+            // Note: removed destStorage check since we now have individual storage mappings
+            startButton.disabled = !(destCluster && destNode && allStoragesMapped && allNetworksMapped);
+        }
+
+        function showMigrationModal(vmid, node) {
+            const modal = document.getElementById('migrationModal');
+            modal.dataset.vmid = vmid;
+            modal.dataset.sourceNode = node;
+            
+            document.getElementById('vmId').value = vmid;
+            document.getElementById('sourceNode').value = node;
+            resetResourceSelects();
+            loadSourceVMConfiguration(vmid, node);
+            migrationModal.show();
+        }
+        
+        function loadSourceVMConfiguration(vmid, node) {
+            // Load source VM configuration to get both network interfaces and disks
+            const sourceClusterId = document.getElementById('sourceClusterId').value;
+            
+            fetch(`/cluster/${sourceClusterId}/vm/${vmid}/config?node=${node}`)
+                .then(response => response.json())
+                .then(config => {
+                    // Process network interfaces
+                    const networkInterfaces = {};
+                    
+                    Object.keys(config).forEach(key => {
+                        if (key.startsWith('net') && config[key]) {
+                            const netConfig = config[key];
+                            const bridgeMatch = netConfig.match(/bridge=([^,]+)/);
+                            if (bridgeMatch) {
+                                networkInterfaces[key] = {
+                                    interface: key,
+                                    currentBridge: bridgeMatch[1],
+                                    config: netConfig
+                                };
+                            }
+                        }
+                    });
+                    
+                    // Process disk configurations
+                    const diskConfigurations = {};
+                    
+                    Object.keys(config).forEach(key => {
+                        if ((key.startsWith('scsi') || key.startsWith('virtio') || key.startsWith('ide') || key.startsWith('sata')) && config[key] && config[key].includes(':')) {
+                            const diskConfig = config[key];
+                            // Skip CD-ROM drives
+                            if (!diskConfig.includes('media=cdrom') && !diskConfig.includes('.iso')) {
+                                const storageMatch = diskConfig.match(/^([^:]+):/);
+                                let sizeMatch = diskConfig.match(/size=([^,]+)/);
+                                
+                                if (storageMatch) {
+                                    diskConfigurations[key] = {
+                                        disk: key,
+                                        currentStorage: storageMatch[1],
+                                        size: sizeMatch ? sizeMatch[1] : 'Unknown',
+                                        config: diskConfig
+                                    };
+                                }
+                            }
+                        }
+                    });
+                    
+                    window.sourceNetworks = networkInterfaces;
+                    window.sourceDisks = diskConfigurations;
+                    updateStorageMappingDisplay();
+                    updateNetworkMappingDisplay();
+                })
+                .catch(error => {
+                    console.error('Error loading VM configuration:', error);
+                    window.sourceNetworks = {};
+                    window.sourceDisks = {};
+                });
+        }
+        
+        function updateStorageMappingDisplay() {
+            const container = document.getElementById('storageMappingContainer');
+            const section = document.getElementById('storageMappingSection');
+            
+            if (!window.sourceDisks || Object.keys(window.sourceDisks).length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+            
+            section.style.display = 'block';
+            container.innerHTML = '';
+            
+            Object.values(window.sourceDisks).forEach(diskInfo => {
+                const mappingDiv = document.createElement('div');
+                mappingDiv.className = 'row mb-2 align-items-center';
+                mappingDiv.innerHTML = `
+                    <div class="col-md-4">
+                        <label class="form-label">${diskInfo.disk}</label>
+                        <small class="text-muted d-block">Current: ${diskInfo.currentStorage}</small>
+                        <small class="text-muted d-block">Size: ${diskInfo.size}</small>
+                    </div>
+                    <div class="col-md-6">
+                        <select class="form-select storage-mapping" data-disk="${diskInfo.disk}" required>
+                            <option value="">Select destination storage...</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <span class="text-muted">→</span>
+                    </div>
+                `;
+                container.appendChild(mappingDiv);
+                
+                // Add event listener for this storage mapping
+                const select = mappingDiv.querySelector('.storage-mapping');
+                select.addEventListener('change', validateMigrationForm);
+            });
+            
+            // Update storage options for all selects
+            updateStorageSelects();
+        }
+        
+        function updateNetworkMappingDisplay() {
+            const container = document.getElementById('networkMappingContainer');
+            const section = document.getElementById('networkMappingSection');
+            
+            if (!window.sourceNetworks || Object.keys(window.sourceNetworks).length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+            
+            section.style.display = 'block';
+            container.innerHTML = '';
+            
+            Object.values(window.sourceNetworks).forEach(netInfo => {
+                const mappingDiv = document.createElement('div');
+                mappingDiv.className = 'row mb-2 align-items-center';
+                mappingDiv.innerHTML = `
+                    <div class="col-md-4">
+                        <label class="form-label">${netInfo.interface}</label>
+                        <small class="text-muted d-block">Current: ${netInfo.currentBridge}</small>
+                    </div>
+                    <div class="col-md-6">
+                        <select class="form-select network-mapping" data-interface="${netInfo.interface}" required>
+                            <option value="">Select destination bridge...</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <span class="text-muted">→</span>
+                    </div>
+                `;
+                container.appendChild(mappingDiv);
+                
+                // Add event listener for this network mapping
+                const select = mappingDiv.querySelector('.network-mapping');
+                select.addEventListener('change', validateMigrationForm);
+                
+                // Populate bridge options for this select
+                if (window.destinationBridges) {
+                    window.destinationBridges.forEach(bridge => {
+                        const option = document.createElement('option');
+                        option.value = bridge.name;
+                        option.textContent = `${bridge.name} (${bridge.type || 'bridge'})`;
+                        select.appendChild(option);
+                    });
+                }
+            });
+        }
+        
+        function resetResourceSelects() {
+            const nodeSelect = document.getElementById('destNode');
+            
+            nodeSelect.innerHTML = '<option value="">Select destination node...</option>';
+            
+            // Hide mapping sections
+            document.getElementById('storageMappingSection').style.display = 'none';
+            document.getElementById('networkMappingSection').style.display = 'none';
+        }
+        
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        function loadClusterResources(clusterId) {
+            resetResourceSelects();
+            const nodeSelect = document.getElementById('destNode');
+            
+            fetch(`/cluster/${clusterId}/resources`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    
+                    clusterResources = data;
+                    
+                    // Populate nodes
+                    data.nodes.forEach(node => {
+                        const option = document.createElement('option');
+                        option.value = node.name;
+                        option.textContent = `${node.name} (${node.status})`;
+                        option.dataset.nodeInfo = JSON.stringify(node);
+                        nodeSelect.appendChild(option);
+                    });
+                    
+                    // Store network bridges for mapping
+                    window.destinationBridges = data.network_bridges || [];
+                    
+                    // Store cluster resources globally for storage mapping
+                    window.clusterResources = data;
+                    
+                    // Update all mapping selects
+                    updateNetworkBridgeSelects();
+                    updateStorageSelects();
+                    
+                    validateMigrationForm();
+                })
+                .catch(error => {
+                    console.error('Error loading cluster resources:', error.message);
+                });
+        }
+        
+        function updateNetworkBridgeSelects() {
+            const networkSelects = document.querySelectorAll('.network-mapping');
+            
+            networkSelects.forEach(select => {
+                const currentValue = select.value;
+                select.innerHTML = '<option value="">Select destination bridge...</option>';
+                
+                if (window.destinationBridges) {
+                    window.destinationBridges.forEach(bridge => {
+                        const option = document.createElement('option');
+                        option.value = bridge.name;
+                        option.textContent = `${bridge.name} (${bridge.type || 'bridge'})`;
+                        if (bridge.name === currentValue) {
+                            option.selected = true;
+                        }
+                        select.appendChild(option);
+                    });
+                }
+            });
+            
+            // Revalidate form after updating selects
+            validateMigrationForm();
+        }
+        
+        function updateStorageSelects() {
+            const storageSelects = document.querySelectorAll('.storage-mapping');
+            
+            storageSelects.forEach(select => {
+                const currentValue = select.value;
+                select.innerHTML = '<option value="">Select destination storage...</option>';
+                
+                if (window.clusterResources && window.clusterResources.storage_pools) {
+                    window.clusterResources.storage_pools.forEach(storage => {
+                        const option = document.createElement('option');
+                        option.value = storage.name;
+                        option.textContent = `${storage.name} (${storage.type})`;
+                        if (storage.name === currentValue) {
+                            option.selected = true;
+                        }
+                        select.appendChild(option);
+                    });
+                }
+            });
+            
+            // Revalidate form after updating selects
+            validateMigrationForm();
+        }
+        
+        function updateNodeInfo(nodeName) {
+            if (!nodeName || !window.clusterResources || !window.clusterResources.nodes) {
+                return;
+            }
+            
+            const node = window.clusterResources.nodes.find(n => n.name === nodeName);
+            if (node) {
+                const nodeStatus = document.getElementById('nodeStatus');
+                const nodeCpu = document.getElementById('nodeCpu');
+                const nodeMemory = document.getElementById('nodeMemory');
+                
+                if (nodeStatus) nodeStatus.textContent = node.status;
+                if (nodeCpu) nodeCpu.textContent = node.cpu.toFixed(2);
+                if (nodeMemory) nodeMemory.textContent = formatBytes(node.memory);
+                
+                // Show mapping sections after node is selected
+                // Get vmid and source node from the modal
+                const vmid = document.getElementById('migrationModal').dataset.vmid;
+                const sourceNode = document.getElementById('migrationModal').dataset.sourceNode;
+                
+                if (vmid && sourceNode) {
+                    loadSourceVMConfiguration(vmid, sourceNode);
+                }
+            }
+            validateMigrationForm();
+        }
+
+        function testMigration() {
+            const form = document.getElementById('migrationForm');
+            const progressDiv = document.getElementById('migrationProgress');
+            
+            // Hide form and show progress
+            form.style.display = 'none';
+            progressDiv.style.display = 'block';
+            
+            // Hide cancel and test buttons during migration
+            document.querySelector('.btn-secondary').style.display = 'none';
+            document.querySelector('.btn-warning').style.display = 'none';
+            
+            // Initialize progress monitoring
+            initProgressMonitoring();
+
+            // Start test migration
+            fetch('/test-migration', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({})
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.status === 'success') {
+                    // Test migration started, monitoring will handle the rest
+                    console.log('Test migration started');
+                } else {
+                    // Show error and return to form
+                    updateProgress(0, 'error', 'Test migration failed: ' + result.message, 'Error occurred');
+                    setTimeout(() => {
+                        form.style.display = 'block';
+                        progressDiv.style.display = 'none';
+                        document.querySelector('.btn-secondary').style.display = 'inline-block';
+                        document.querySelector('.btn-warning').style.display = 'inline-block';
+                    }, 2000);
+                }
+            })
+            .catch(error => {
+                console.error('Error starting test migration:', error);
+                updateProgress(0, 'error', 'Failed to start test migration', 'Error occurred');
+                setTimeout(() => {
+                    form.style.display = 'block';
+                    progressDiv.style.display = 'none';
+                    document.querySelector('.btn-secondary').style.display = 'inline-block';
+                    document.querySelector('.btn-warning').style.display = 'inline-block';
+                }, 2000);
+            });
+        }
+        
+        function resetMigrationUI() {
+            const form = document.getElementById('migrationForm');
+            const progressDiv = document.getElementById('migrationProgress');
+            
+            form.style.display = 'block';
+            progressDiv.style.display = 'none';
+            document.querySelector('.btn-secondary').style.display = 'inline-block';
+            document.querySelector('.btn-warning').style.display = 'inline-block';
+        }
+        
+        function startMigration() {
+            const form = document.getElementById('migrationForm');
+            const progressDiv = document.getElementById('migrationProgress');
+            
+            // Collect storage mappings
+            const storageMappings = {};
+            document.querySelectorAll('.storage-mapping').forEach(select => {
+                const disk = select.dataset.disk;
+                const destStorage = select.value;
+                if (disk && destStorage) {
+                    storageMappings[disk] = destStorage;
+                }
+            });
+            
+            // Collect network mappings
+            const networkMappings = {};
+            document.querySelectorAll('.network-mapping').forEach(select => {
+                const interface = select.dataset.interface;
+                const destBridge = select.value;
+                if (interface && destBridge) {
+                    networkMappings[interface] = destBridge;
+                }
+            });
+            
+            const data = {
+                source_cluster_id: document.getElementById('sourceClusterId').value,
+                dest_cluster_id: document.getElementById('destCluster').value,
+                vmid: document.getElementById('vmId').value,
+                source_node: document.getElementById('sourceNode').value,
+                dest_node: document.getElementById('destNode').value,
+                storage_mappings: storageMappings,
+                delete_source: document.getElementById('deleteSource').checked,
+                network_mappings: networkMappings
+            };
+
+            // Hide form and show progress
+            form.style.display = 'none';
+            progressDiv.style.display = 'block';
+            
+            // Hide cancel button during migration
+            document.querySelector('.btn-secondary').style.display = 'none';
+            
+            // Initialize progress monitoring
+            initProgressMonitoring();
+
+            // Start migration
+            fetch('/migrate', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.status === 'success') {
+                    // Migration started, monitoring will handle the rest
+                    console.log('Migration started successfully');
+                } else {
+                    updateProgress(0, 'error', 'Migration failed: ' + result.message, 'Error occurred');
+                    setTimeout(() => {
+                        form.style.display = 'block';
+                        progressDiv.style.display = 'none';
+                        document.querySelector('.btn-secondary').style.display = 'inline-block';
+                    }, 2000);
+                }
+            })
+            .catch(error => {
+                console.error('Error starting migration:', error);
+                updateProgress(0, 'error', 'Failed to start migration', 'Error occurred');
+                setTimeout(() => {
+                    form.style.display = 'block';
+                    progressDiv.style.display = 'none';
+                    document.querySelector('.btn-secondary').style.display = 'inline-block';
+                }, 2000);
+            });
+        }
+        
+        function initProgressMonitoring() {
+            // Start polling for migration status
+            const pollInterval = setInterval(function() {
+                fetch('/migration-status')
+                    .then(response => response.json())
+                    .then(status => {
+                        updateProgress(status.progress, status.step, status.message, null, status.vmid);
+                        
+                        // Update disk transfer progress if active
+                        if (status.disk_transfer && status.disk_transfer.active) {
+                            updateDiskTransferProgress(status.disk_transfer);
+                        } else {
+                            hideDiskTransferProgress();
+                        }
+                        
+                        // Add details to log if available
+                        if (status.details && status.details.length > 0) {
+                            const lastDetail = status.details[status.details.length - 1];
+                            addToMigrationLog(lastDetail.timestamp, lastDetail.message);
+                        }
+                        
+                        // Stop polling if migration is complete or failed
+                        if (!status.active) {
+                            clearInterval(pollInterval);
+                            hideDiskTransferProgress();
+                            
+                            // Show close button after completion
+                            setTimeout(() => {
+                                const footer = document.querySelector('.modal-footer');
+                                footer.innerHTML = '<button type="button" class="btn btn-success" data-bs-dismiss="modal" onclick="location.reload()">Close</button>';
+                            }, 2000);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error polling migration status:', error);
+                    });
+            }, 1000); // Poll every second
+        }
+        
+        function updateDiskTransferProgress(diskTransfer) {
+            const progressDiv = document.getElementById('diskTransferProgress');
+            const progressBar = document.getElementById('diskTransferProgressBar');
+            const titleSpan = document.getElementById('diskTransferTitle');
+            const statsSpan = document.getElementById('diskTransferStats');
+            const speedSpan = document.getElementById('diskTransferSpeed');
+            const etaSpan = document.getElementById('diskTransferEta');
+            
+            // Show the disk transfer progress section
+            progressDiv.style.display = 'block';
+            
+            // Update title with transfer type and disk name
+            const transferType = diskTransfer.transfer_type === 'download' ? 'Downloading' : 'Uploading';
+            titleSpan.textContent = `${transferType}: ${diskTransfer.current_disk_name}`;
+            
+            // Update progress bar
+            const progress = Math.round(diskTransfer.progress);
+            progressBar.style.width = progress + '%';
+            progressBar.setAttribute('aria-valuenow', progress);
+            progressBar.textContent = progress + '%';
+            
+            // Update stats (transferred/total)
+            if (diskTransfer.total_size > 0) {
+                const transferred = formatBytes(diskTransfer.transferred);
+                const total = formatBytes(diskTransfer.total_size);
+                statsSpan.textContent = `${transferred} / ${total}`;
+            } else {
+                statsSpan.textContent = '';
+            }
+            
+            // Update speed and ETA
+            speedSpan.textContent = diskTransfer.speed ? `Speed: ${diskTransfer.speed}` : '';
+            etaSpan.textContent = diskTransfer.eta ? `ETA: ${diskTransfer.eta}` : '';
+        }
+        
+        function hideDiskTransferProgress() {
+            const progressDiv = document.getElementById('diskTransferProgress');
+            progressDiv.style.display = 'none';
+        }
+        
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+        
+        function updateProgress(progress, step, message, logMessage, vmid) {
+            // Update progress bar
+            const progressBar = document.getElementById('migrationProgressBar');
+            progressBar.style.width = progress + '%';
+            progressBar.setAttribute('aria-valuenow', progress);
+            progressBar.textContent = progress + '%';
+            
+            // Update progress bar color based on status
+            progressBar.className = 'progress-bar progress-bar-striped';
+            if (step === 'error') {
+                progressBar.className += ' bg-danger';
+            } else if (step === 'completed') {
+                progressBar.className += ' bg-success';
+                progressBar.classList.remove('progress-bar-animated');
+            } else {
+                progressBar.className += ' progress-bar-animated bg-primary';
+            }
+            
+            // Update current step and message
+            document.getElementById('currentStep').textContent = step.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+            document.getElementById('currentMessage').textContent = message;
+            
+            // Update VMID if provided
+            if (vmid) {
+                document.getElementById('migrationVmid').textContent = vmid;
+                document.getElementById('vmidInfo').style.display = 'block';
+            }
+            
+            // Add to log if logMessage provided
+            if (logMessage) {
+                const now = new Date();
+                const timestamp = now.toLocaleTimeString();
+                addToMigrationLog(timestamp, logMessage);
+            }
+        }
+        
+        function addToMigrationLog(timestamp, message) {
+            const logDiv = document.getElementById('migrationLog');
+            
+            // Clear initial message if this is the first real log entry
+            if (logDiv.children.length === 1 && logDiv.children[0].classList.contains('text-muted')) {
+                logDiv.innerHTML = '';
+            }
+            
+            const logEntry = document.createElement('div');
+            logEntry.className = 'mb-1';
+            logEntry.innerHTML = `
+                <small class="text-muted">${timestamp}</small><br>
+                <span>${message}</span>
+            `;
+            
+            logDiv.appendChild(logEntry);
+            
+            // Auto-scroll to bottom
+            logDiv.scrollTop = logDiv.scrollHeight;
+            
+            // Limit log entries to last 20
+            while (logDiv.children.length > 20) {
+                logDiv.removeChild(logDiv.firstChild);
+            }
+        }
+    </script>
+</body>
+</html>

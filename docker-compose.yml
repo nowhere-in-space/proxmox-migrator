@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  proxmox-migrator:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - SECRET_KEY=${SECRET_KEY:-default-secret-key}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - FLASK_ENV=production
+    volumes:
+      - ./instance:/app/instance
+      - ./logs:/app/logs
+      - ./temp_migration:/app/temp_migration
+    restart: unless-stopped
+    networks:
+      - proxmox-net
+
+networks:
+  proxmox-net:
+    driver: bridge

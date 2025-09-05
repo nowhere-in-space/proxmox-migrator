@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    {% if first_login %}
+                        <h3>Welcome! Set Admin Password</h3>
+                    {% else %}
+                        <h3>Login</h3>
+                    {% endif %}
+                </div>
+                <div class="card-body">
+                    <form method="POST">
+                        <div class="mb-3">
+                            <label for="password" class="form-label">
+                                {% if first_login %}
+                                    Enter New Password
+                                {% else %}
+                                    Password
+                                {% endif %}
+                            </label>
+                            <input type="password" class="form-control" id="password" name="password" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">
+                            {% if first_login %}
+                                Set Password
+                            {% else %}
+                                Login
+                            {% endif %}
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

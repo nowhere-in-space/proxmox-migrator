@@ -1,0 +1,492 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+    .card {
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        transition: box-shadow 0.3s ease;
+    }
+    .card:hover {
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+    
+    .progress-ring {
+        transform: rotate(-90deg);
+        border-radius: 50%;
+        background-color: white;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .progress-ring__circle {
+        stroke-width: 8;
+        fill: none;
+        transition: stroke-dashoffset 0.3s ease, stroke 0.3s ease;
+    }
+
+    .progress-ring__background {
+        stroke: #e9ecef;
+    }
+
+    .progress-ring__text {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 18px;
+        font-weight: bold;
+        color: #333;
+    }
+</style>
+
+<div class="container mt-4">
+    <div class="row">
+        {% for cluster_info in clusters_overview %}
+        <div class="col-md-6 mb-4">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start mb-3">
+                        <h5 class="card-title">
+                            <span id="cluster-name-{{ cluster_info.cluster.id }}">{{ cluster_info.cluster.name }}</span>
+                            <small class="text-muted">{{ cluster_info.cluster.api_host }}</small>
+                        </h5>
+                        <div class="dropdown">
+                            <button class="btn btn-link" type="button" data-bs-toggle="dropdown">
+                                <i class="bi bi-three-dots-vertical"></i>
+                            </button>
+                            <ul class="dropdown-menu dropdown-menu-end">
+                                <li>
+                                    <a class="dropdown-item" href="#" data-bs-toggle="modal" 
+                                       data-bs-target="#renameClusterModal" 
+                                       data-cluster-id="{{ cluster_info.cluster.id }}"
+                                       data-cluster-name="{{ cluster_info.cluster.name }}">
+                                        Rename
+                                    </a>
+                                </li>
+                                <li>
+                                    <a class="dropdown-item" href="#" data-bs-toggle="modal" 
+                                       data-bs-target="#deleteClusterModal"
+                                       data-cluster-id="{{ cluster_info.cluster.id }}"
+                                       data-cluster-name="{{ cluster_info.cluster.name }}">
+                                        Delete
+                                    </a>
+                                </li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- Loading/Content Area -->
+                    <div id="cluster-content-{{ cluster_info.cluster.id }}">
+                        {% if cluster_info.status == 'loading' %}
+                            <div class="text-center py-5">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Loading...</span>
+                                </div>
+                                <p class="mt-2 text-muted">Loading cluster statistics...</p>
+                            </div>
+                        {% elif cluster_info.status == 'online' %}
+                            <div class="row text-center">
+                                <!-- CPU Usage -->
+                                <div class="col-md-4">
+                                    <div class="position-relative">
+                                        <svg class="progress-ring mb-2" width="120" height="120">
+                                            <circle class="progress-ring__circle progress-ring__background" cx="60" cy="60" r="54"></circle>
+                                            <circle class="progress-ring__circle progress-cpu" cx="60" cy="60" r="54" data-percent="{{ '%.1f' | format(cluster_info.overview.cpu.percent) }}"></circle>
+                                        </svg>
+                                        <div class="progress-ring__text">{{ '%.1f' | format(cluster_info.overview.cpu.percent) }}%</div>
+                                    </div>
+                                    <h6>CPU Usage</h6>
+                                    <p class="mb-0">{{ cluster_info.overview.cpu.total }} cores</p>
+                                </div>
+                                
+                                <!-- Memory Usage -->
+                                <div class="col-md-4">
+                                    <div class="position-relative">
+                                        <svg class="progress-ring mb-2" width="120" height="120">
+                                            <circle class="progress-ring__circle progress-ring__background" cx="60" cy="60" r="54"></circle>
+                                            <circle class="progress-ring__circle progress-memory" cx="60" cy="60" r="54" data-percent="{{ '%.1f' | format(cluster_info.overview.memory.percent) }}"></circle>
+                                        </svg>
+                                        <div class="progress-ring__text">{{ '%.1f' | format(cluster_info.overview.memory.percent) }}%</div>
+                                    </div>
+                                    <h6>Memory Usage</h6>
+                                    <p class="mb-0">{{ cluster_info.overview.memory.used_formatted }} / {{ cluster_info.overview.memory.total_formatted }}</p>
+                                </div>
+                                
+                                <!-- Storage Usage -->
+                                <div class="col-md-4">
+                                    <div class="position-relative">
+                                        <svg class="progress-ring mb-2" width="120" height="120">
+                                            <circle class="progress-ring__circle progress-ring__background" cx="60" cy="60" r="54"></circle>
+                                            <circle class="progress-ring__circle progress-storage" cx="60" cy="60" r="54" data-percent="{{ '%.1f' | format(cluster_info.overview.storage.percent) }}"></circle>
+                                        </svg>
+                                        <div class="progress-ring__text">{{ '%.1f' | format(cluster_info.overview.storage.percent) }}%</div>
+                                    </div>
+                                    <h6>Storage Usage</h6>
+                                    <p class="mb-0">{{ cluster_info.overview.storage.used_formatted }} / {{ cluster_info.overview.storage.total_formatted }}</p>
+                                </div>
+                            </div>
+                            <div class="text-center mt-3">
+                                <a href="{{ url_for('list_vms', cluster_id=cluster_info.cluster.id) }}" class="btn btn-primary">View VMs</a>
+                            </div>
+                        {% else %}
+                            <div class="alert alert-danger">
+                                <i class="bi bi-exclamation-triangle"></i>
+                                <strong>Cluster Offline</strong><br>
+                                Error: {{ cluster_info.error }}
+                            </div>
+                            <div class="text-center">
+                                <button class="btn btn-outline-primary btn-sm" onclick="retryClusterLoad({{ cluster_info.cluster.id }})">
+                                    <i class="bi bi-arrow-clockwise"></i> Retry
+                                </button>
+                                <a href="{{ url_for('list_vms', cluster_id=cluster_info.cluster.id) }}" class="btn btn-primary btn-sm">View VMs</a>
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+
+        <div class="col-md-6 mb-4">
+            <div class="card h-100">
+                <div class="card-body text-center">
+                    <h5 class="card-title mb-4">Add New Cluster</h5>
+                    <a href="{{ url_for('add_cluster') }}" class="btn btn-primary">
+                        <i class="bi bi-plus-circle"></i> Add Cluster
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Rename Cluster Modal -->
+<div class="modal fade" id="renameClusterModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Rename Cluster</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="renameClusterForm" method="POST">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="newClusterName" class="form-label">New Name</label>
+                        <input type="text" class="form-control" id="newClusterName" name="name" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Cluster Modal -->
+<div class="modal fade" id="deleteClusterModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Delete Cluster</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete cluster <strong id="deleteClusterName"></strong>?</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <form id="deleteClusterForm" method="POST" class="d-inline">
+                    <button type="submit" class="btn btn-danger">Delete</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Initialize progress rings
+        const circles = document.querySelectorAll('.progress-ring__circle:not(.progress-ring__background)');
+        circles.forEach(circle => {
+            const radius = circle.r.baseVal.value;
+            const circumference = 2 * Math.PI * radius;
+            
+            // Set the initial state
+            circle.style.strokeDasharray = `${circumference} ${circumference}`;
+            circle.style.strokeDashoffset = circumference;
+            
+            // Get the percentage from the data attribute
+            const percent = parseFloat(circle.dataset.percent);
+            
+            // Get color based on percentage
+            let color;
+            if (percent >= 90) {
+                color = '#dc3545'; // red
+            } else if (percent >= 70) {
+                color = '#ffc107'; // yellow
+            } else {
+                color = '#28a745'; // green
+            }
+            
+            // Set the color
+            circle.style.stroke = color;
+            
+            // Calculate and set the progress
+            const offset = circumference - (percent / 100 * circumference);
+            circle.style.strokeDashoffset = offset;
+        });
+
+        // Handle Rename Modal
+        const renameModal = document.getElementById('renameClusterModal');
+        if (renameModal) {
+            renameModal.addEventListener('show.bs.modal', event => {
+                const button = event.relatedTarget;
+                const clusterId = button.dataset.clusterId;
+                const clusterName = button.dataset.clusterName;
+                
+                const form = renameModal.querySelector('#renameClusterForm');
+                form.action = `/cluster/${clusterId}/rename`;
+                
+                const input = form.querySelector('#newClusterName');
+                input.value = clusterName;
+            });
+        }
+
+        // Handle Delete Modal
+        const deleteModal = document.getElementById('deleteClusterModal');
+        if (deleteModal) {
+            deleteModal.addEventListener('show.bs.modal', event => {
+                const button = event.relatedTarget;
+                const clusterId = button.dataset.clusterId;
+                const clusterName = button.dataset.clusterName;
+                
+                deleteModal.querySelector('#deleteClusterName').textContent = clusterName;
+                const form = deleteModal.querySelector('#deleteClusterForm');
+                form.action = `/cluster/${clusterId}/delete`;
+            });
+        }
+
+        // Асинхронная загрузка статистики кластеров
+        async function loadClusterOverview(clusterId) {
+            try {
+                const response = await fetch(`/cluster/${clusterId}/overview`);
+                console.log(`Cluster ${clusterId} response status:`, response.status);
+                const data = await response.json();
+                console.log(`Cluster ${clusterId} data:`, data);
+                
+                const contentDiv = document.getElementById(`cluster-content-${clusterId}`);
+                
+                if (data.status === 'online') {
+                    contentDiv.innerHTML = `
+                        <div class="row text-center">
+                            <!-- CPU Usage -->
+                            <div class="col-md-4">
+                                <div class="position-relative">
+                                    <svg class="progress-ring mb-2" width="120" height="120">
+                                        <circle class="progress-ring__circle progress-ring__background" cx="60" cy="60" r="54"></circle>
+                                        <circle class="progress-ring__circle progress-cpu" cx="60" cy="60" r="54" data-percent="${data.overview.cpu.usage_percent.toFixed(1)}"></circle>
+                                    </svg>
+                                    <div class="progress-ring__text">${data.overview.cpu.usage_percent.toFixed(1)}%</div>
+                                </div>
+                                <h6>CPU Usage</h6>
+                                <p class="mb-0">${data.overview.cpu.total} cores</p>
+                            </div>
+                            
+                            <!-- Memory Usage -->
+                            <div class="col-md-4">
+                                <div class="position-relative">
+                                    <svg class="progress-ring mb-2" width="120" height="120">
+                                        <circle class="progress-ring__circle progress-ring__background" cx="60" cy="60" r="54"></circle>
+                                        <circle class="progress-ring__circle progress-memory" cx="60" cy="60" r="54" data-percent="${data.overview.memory.usage_percent.toFixed(1)}"></circle>
+                                    </svg>
+                                    <div class="progress-ring__text">${data.overview.memory.usage_percent.toFixed(1)}%</div>
+                                </div>
+                                <h6>Memory Usage</h6>
+                                <p class="mb-0">${data.overview.memory.used_formatted} / ${data.overview.memory.total_formatted}</p>
+                            </div>
+                            
+                            <!-- Storage Usage -->
+                            <div class="col-md-4">
+                                <div class="position-relative">
+                                    <svg class="progress-ring mb-2" width="120" height="120">
+                                        <circle class="progress-ring__circle progress-ring__background" cx="60" cy="60" r="54"></circle>
+                                        <circle class="progress-ring__circle progress-storage" cx="60" cy="60" r="54" data-percent="${data.overview.storage.usage_percent.toFixed(1)}"></circle>
+                                    </svg>
+                                    <div class="progress-ring__text">${data.overview.storage.usage_percent.toFixed(1)}%</div>
+                                </div>
+                                <h6>Storage Usage</h6>
+                                <p class="mb-0">${data.overview.storage.used_formatted} / ${data.overview.storage.total_formatted}</p>
+                            </div>
+                        </div>
+                        <div class="text-center mt-3">
+                            <a href="/cluster/${clusterId}/vms" class="btn btn-primary">View VMs</a>
+                        </div>
+                    `;
+                    
+                    // Обновляем прогресс-бары
+                    initProgressRings();
+                } else {
+                    contentDiv.innerHTML = `
+                        <div class="alert alert-danger">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <strong>Cluster Offline</strong><br>
+                            Error: ${data.error}
+                        </div>
+                        <div class="text-center">
+                            <button class="btn btn-outline-primary btn-sm" onclick="retryClusterLoad(${clusterId})">
+                                <i class="bi bi-arrow-clockwise"></i> Retry
+                            </button>
+                            <a href="/cluster/${clusterId}/vms" class="btn btn-primary btn-sm">View VMs</a>
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.error(`Error loading cluster ${clusterId}:`, error);
+                const contentDiv = document.getElementById(`cluster-content-${clusterId}`);
+                contentDiv.innerHTML = `
+                    <div class="alert alert-danger">
+                        <i class="bi bi-exclamation-triangle"></i>
+                        <strong>Connection Error</strong><br>
+                        Failed to load cluster data
+                    </div>
+                    <div class="text-center">
+                        <button class="btn btn-outline-primary btn-sm" onclick="retryClusterLoad(${clusterId})">
+                            <i class="bi bi-arrow-clockwise"></i> Retry
+                        </button>
+                    </div>
+                `;
+            }
+        }
+
+        // Функция для повторной попытки загрузки
+        function retryClusterLoad(clusterId) {
+            const contentDiv = document.getElementById(`cluster-content-${clusterId}`);
+            contentDiv.innerHTML = `
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2 text-muted">Retrying...</p>
+                </div>
+            `;
+            loadClusterOverview(clusterId);
+        }
+
+        // Загружаем статистику всех кластеров после загрузки страницы
+        const clusterCards = document.querySelectorAll('[id^="cluster-content-"]');
+        clusterCards.forEach(card => {
+            const clusterId = card.id.replace('cluster-content-', '');
+            if (card.innerHTML.includes('Loading cluster statistics')) {
+                loadClusterOverview(clusterId);
+            }
+        });
+    });
+
+    // Инициализация прогресс-баров
+    function initProgressRings() {
+        const rings = document.querySelectorAll('.progress-ring__circle[data-percent]');
+        rings.forEach(ring => {
+            const percent = parseFloat(ring.getAttribute('data-percent'));
+            const radius = parseFloat(ring.getAttribute('r'));
+            const circumference = 2 * Math.PI * radius;
+            const offset = circumference - (percent / 100) * circumference;
+            
+            ring.style.strokeDasharray = circumference;
+            ring.style.strokeDashoffset = offset;
+            
+            // Color based on percentage
+            if (ring.classList.contains('progress-cpu')) {
+                if (percent < 50) ring.style.stroke = '#28a745';
+                else if (percent < 80) ring.style.stroke = '#ffc107';
+                else ring.style.stroke = '#dc3545';
+            } else if (ring.classList.contains('progress-memory')) {
+                if (percent < 70) ring.style.stroke = '#17a2b8';
+                else if (percent < 90) ring.style.stroke = '#ffc107';
+                else ring.style.stroke = '#dc3545';
+            } else if (ring.classList.contains('progress-storage')) {
+                if (percent < 80) ring.style.stroke = '#6f42c1';
+                else if (percent < 95) ring.style.stroke = '#ffc107';
+                else ring.style.stroke = '#dc3545';
+            }
+        });
+    }
+
+    // Инициализируем прогресс-бары при загрузке страницы
+    initProgressRings();
+
+    // Handle rename cluster form submission
+    const renameForm = document.getElementById('renameClusterForm');
+    if (renameForm) {
+        renameForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const url = this.action;
+            
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Close modal
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('renameClusterModal'));
+                    modal.hide();
+                    
+                    // Show success message
+                    alert(result.message);
+                    
+                    // Reload page to refresh cluster list
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Error renaming cluster:', error);
+                alert('Error renaming cluster: ' + error.message);
+            }
+        });
+    }
+
+    // Handle delete cluster form submission
+    const deleteForm = document.getElementById('deleteClusterForm');
+    if (deleteForm) {
+        deleteForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const url = this.action;
+            
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Close modal
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('deleteClusterModal'));
+                    modal.hide();
+                    
+                    // Show success message
+                    alert(result.message);
+                    
+                    // Reload page to refresh cluster list
+                    window.location.reload();
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (error) {
+                console.error('Error deleting cluster:', error);
+                alert('Error deleting cluster: ' + error.message);
+            }
+        });
+    }
+</script>
+{% endblock %}
