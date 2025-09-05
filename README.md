@@ -31,7 +31,7 @@ This tool allows you to migrate virtual machines between different Proxmox clust
 1. Clone the repository:
 ```bash
 git clone <repository-url>
-cd panteon-datacenter
+cd proxmox-migrator
 ```
 
 2. Create a virtual environment:
