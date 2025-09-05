@@ -267,7 +267,7 @@
             });
         }
 
-        // Асинхронная загрузка статистики кластеров
+        // Asynchronous loading of cluster statistics
         async function loadClusterOverview(clusterId) {
             try {
                 const response = await fetch(`/cluster/${clusterId}/overview`);
@@ -324,7 +324,7 @@
                         </div>
                     `;
                     
-                    // Обновляем прогресс-бары
+                    // Update progress bars
                     initProgressRings();
                 } else {
                     contentDiv.innerHTML = `
@@ -359,7 +359,7 @@
             }
         }
 
-        // Функция для повторной попытки загрузки
+        // Function for retry loading
         function retryClusterLoad(clusterId) {
             const contentDiv = document.getElementById(`cluster-content-${clusterId}`);
             contentDiv.innerHTML = `
@@ -373,7 +373,7 @@
             loadClusterOverview(clusterId);
         }
 
-        // Загружаем статистику всех кластеров после загрузки страницы
+        // Load statistics for all clusters after page load
         const clusterCards = document.querySelectorAll('[id^="cluster-content-"]');
         clusterCards.forEach(card => {
             const clusterId = card.id.replace('cluster-content-', '');
@@ -383,7 +383,7 @@
         });
     });
 
-    // Инициализация прогресс-баров
+    // Initialize progress bars
     function initProgressRings() {
         const rings = document.querySelectorAll('.progress-ring__circle[data-percent]');
         rings.forEach(ring => {
@@ -412,7 +412,7 @@
         });
     }
 
-    // Инициализируем прогресс-бары при загрузке страницы
+    // Initialize progress bars when the page loads
     initProgressRings();
 
     // Handle rename cluster form submission

@@ -741,6 +741,11 @@
                     .then(status => {
                         updateProgress(status.progress, status.step, status.message, null, status.vmid);
                         
+                        // Check if VM stop confirmation is needed
+                        if (status.needs_confirmation) {
+                            showVmStopConfirmation(status.vmid);
+                        }
+                        
                         // Update disk transfer progress if active
                         if (status.disk_transfer && status.disk_transfer.active) {
                             updateDiskTransferProgress(status.disk_transfer);
@@ -880,6 +885,104 @@
             while (logDiv.children.length > 20) {
                 logDiv.removeChild(logDiv.firstChild);
             }
+        }
+        
+        // Variable to prevent showing multiple VM stop confirmation dialogs
+        let vmStopConfirmationShown = false;
+        
+        function showVmStopConfirmation(vmid) {
+            // Prevent showing multiple confirmation dialogs
+            if (vmStopConfirmationShown) {
+                return;
+            }
+            
+            vmStopConfirmationShown = true;
+            
+            // Create confirmation dialog
+            const confirmDialog = document.createElement('div');
+            confirmDialog.className = 'modal fade';
+            confirmDialog.id = 'vmStopConfirmModal';
+            confirmDialog.setAttribute('tabindex', '-1');
+            confirmDialog.setAttribute('aria-labelledby', 'vmStopConfirmModalLabel');
+            confirmDialog.setAttribute('aria-hidden', 'true');
+            confirmDialog.innerHTML = `
+                <div class="modal-dialog">
+                    <div class="modal-content">
+                        <div class="modal-header bg-warning">
+                            <h5 class="modal-title" id="vmStopConfirmModalLabel">Confirm VM Shutdown</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p><strong>Warning:</strong> Virtual Machine ${vmid} needs to be stopped for migration.</p>
+                            <p>Do you want to proceed with stopping this VM?</p>
+                            <p class="text-danger"><small>Note: All running processes in the VM will be terminated.</small></p>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" onclick="rejectVmStop()">Cancel Migration</button>
+                            <button type="button" class="btn btn-danger" onclick="confirmVmStop()">Stop VM and Continue</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            document.body.appendChild(confirmDialog);
+            
+            // Show the modal
+            const vmStopModal = new bootstrap.Modal(document.getElementById('vmStopConfirmModal'));
+            vmStopModal.show();
+        }
+        
+        function confirmVmStop() {
+            // Send confirmation to server
+            fetch('/confirm-vm-stop', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(result => {
+                if (result.status === 'success') {
+                    console.log('VM stop confirmed');
+                    // Close the modal
+                    const vmStopModal = bootstrap.Modal.getInstance(document.getElementById('vmStopConfirmModal'));
+                    vmStopModal.hide();
+                    
+                    // Add entry to migration log
+                    const now = new Date();
+                    const timestamp = now.toLocaleTimeString();
+                    addToMigrationLog(timestamp, 'User confirmed VM shutdown. Proceeding with migration.');
+                }
+            })
+            .catch(error => {
+                console.error('Error confirming VM stop:', error);
+                alert('Failed to confirm VM stop: ' + error.message);
+            });
+        }
+        
+        function rejectVmStop() {
+            // User rejected stopping the VM, so cancel the migration
+            console.log('VM stop rejected by user');
+            
+            // Add entry to migration log
+            const now = new Date();
+            const timestamp = now.toLocaleTimeString();
+            addToMigrationLog(timestamp, 'User cancelled VM shutdown. Migration aborted.');
+            
+            // TODO: Implement cancellation endpoint
+            fetch('/cancel-migration', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .catch(error => {
+                console.error('Error cancelling migration:', error);
+            });
+        }
+    </script>
+</body>
+</html>
         }
     </script>
 </body>

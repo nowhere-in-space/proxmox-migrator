@@ -18,6 +18,8 @@ def migrate_vm(data):
         migration_status['details'] = []
         migration_status['current_disk'] = 0
         migration_status['total_disks'] = 0
+        migration_status['needs_confirmation'] = False
+        migration_status['stop_confirmed'] = False
         
         # Initialize migration status using update function
         update_migration_status('initializing', message='Starting migration process...', details='Migration initiated')
@@ -52,14 +54,49 @@ def migrate_vm(data):
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         
         try:
-            # Stop VM if running
+            # Check if VM is running and request confirmation to stop it
             if vm_info['status'] == 'running':
-                update_migration_status('stopping_vm', message=f"Stopping VM {data['vmid']}...", 
-                                      details=f"VM is currently running, stopping...")
+                # Set status to waiting for confirmation
+                update_migration_status('confirm_vm_stop', message=f"VM {data['vmid']} is running. Waiting for confirmation to stop...", 
+                                      details=f"Requesting user confirmation before stopping VM",
+                                      needs_confirmation=True)
+                logger.warning(f"VM {data['vmid']} is running. Waiting for user confirmation to stop.")
+                
+                # Wait for confirmation (handled by the frontend via the API)
+                timeout = 300  # 5 minute timeout for confirmation
+                start_time = time.time()
+                while True:
+                    # Check if confirmation was received
+                    if migration_status.get('stop_confirmed', False):
+                        logger.warning(f"Received confirmation to stop VM {data['vmid']}")
+                        update_migration_status('stopping_vm', message=f"Stopping VM {data['vmid']}...", 
+                                              details=f"User confirmed. Stopping VM...", stage_progress=10)
+                        break
+                    
+                    # Check if migration was cancelled
+                    if not migration_status.get('active', False):
+                        logger.warning(f"Migration cancelled while waiting for VM stop confirmation")
+                        return
+                    
+                    # Check for timeout
+                    if time.time() - start_time > timeout:
+                        raise Exception("Timeout waiting for confirmation to stop VM")
+                    
+                    # Update status message periodically
+                    elapsed = time.time() - start_time
+                    if int(elapsed) % 10 == 0:  # Update message every 10 seconds
+                        update_migration_status('confirm_vm_stop', 
+                                              message=f"VM {data['vmid']} is running. Waiting for confirmation to stop... ({int(timeout - elapsed)}s remaining)", 
+                                              details=f"Requesting user confirmation before stopping VM",
+                                              needs_confirmation=True)
+                    
+                    time.sleep(1)
+                
+                # Now stop the VM after confirmation
                 logger.warning(f"Stopping VM {data['vmid']}")
                 source_proxmox.nodes(data['source_node']).qemu(data['vmid']).status.stop.post()
                 
-                timeout = 300  # 5 minutes timeout
+                timeout = 300  # 5 minutes timeout for stopping
                 start_time = time.time()
                 while True:
                     status = source_proxmox.nodes(data['source_node']).qemu(data['vmid']).status.current.get()

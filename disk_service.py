@@ -18,6 +18,8 @@ migration_status = {
     'total_stages': 0,
     'current_disk': 0,
     'total_disks': 0,
+    'needs_confirmation': False,
+    'stop_confirmed': False,
     'disk_transfer': {
         'active': False,
         'current_disk_name': '',
@@ -32,19 +34,19 @@ migration_status = {
 
 # Migration stage definitions with fixed progress ranges
 MIGRATION_STAGES = {
-    'initializing': {'start': 0, 'end': 3, 'name': 'Инициализация'},
-    'validation': {'start': 3, 'end': 6, 'name': 'Валидация данных'},
-    'connecting': {'start': 6, 'end': 12, 'name': 'Подключение к источнику'},
-    'vm_info': {'start': 12, 'end': 15, 'name': 'Получение информации о ВМ'},
-    'vm_stopping': {'start': 15, 'end': 25, 'name': 'Остановка ВМ'},
-    'ssh_connection': {'start': 25, 'end': 30, 'name': 'SSH подключение'},
-    'dest_connecting': {'start': 30, 'end': 35, 'name': 'Подключение к назначению'},
-    'config_reading': {'start': 35, 'end': 40, 'name': 'Чтение конфигурации'},
-    'vm_creation': {'start': 40, 'end': 50, 'name': 'Создание ВМ'},
-    'disk_migration': {'start': 50, 'end': 90, 'name': 'Миграция дисков'},
-    'network_config': {'start': 90, 'end': 95, 'name': 'Настройка сети'},
-    'cleanup': {'start': 95, 'end': 98, 'name': 'Очистка'},
-    'completed': {'start': 98, 'end': 100, 'name': 'Завершение'}
+    'initializing': {'start': 0, 'end': 3, 'name': 'Initialization'},
+    'validation': {'start': 3, 'end': 6, 'name': 'Data Validation'},
+    'connecting': {'start': 6, 'end': 12, 'name': 'Connecting to Source'},
+    'vm_info': {'start': 12, 'end': 15, 'name': 'Getting VM Information'},
+    'vm_stopping': {'start': 15, 'end': 25, 'name': 'Stopping VM'},
+    'ssh_connection': {'start': 25, 'end': 30, 'name': 'SSH Connection'},
+    'dest_connecting': {'start': 30, 'end': 35, 'name': 'Connecting to Destination'},
+    'config_reading': {'start': 35, 'end': 40, 'name': 'Reading Configuration'},
+    'vm_creation': {'start': 40, 'end': 50, 'name': 'Creating VM'},
+    'disk_migration': {'start': 50, 'end': 90, 'name': 'Disk Migration'},
+    'network_config': {'start': 90, 'end': 95, 'name': 'Network Configuration'},
+    'cleanup': {'start': 95, 'end': 98, 'name': 'Cleanup'},
+    'completed': {'start': 98, 'end': 100, 'name': 'Completion'}
 }
 
 def update_disk_transfer_progress(disk_name, transfer_type, progress, transferred_bytes=0, total_bytes=0, speed_mbps=0):
@@ -147,13 +149,13 @@ def calculate_disk_progress(current_disk, total_disks, disk_stage_progress=0):
     
     return completed_disks_progress + current_disk_progress
 
-def update_migration_status(step, progress_override=None, message='', details=None, stage_progress=0):
+def update_migration_status(step, progress_override=None, message='', details=None, stage_progress=0, needs_confirmation=False):
     """Update global migration status with improved progress calculation"""
     global migration_status
     
     # Determine current stage from step
     current_stage = step
-    if step in ['vm_stopped', 'vm_ready']:
+    if step in ['vm_stopped', 'vm_ready', 'confirm_vm_stop']:
         current_stage = 'vm_stopping'
     elif step in ['ssh_connecting', 'ssh_connected']:
         current_stage = 'ssh_connection'
@@ -188,6 +190,7 @@ def update_migration_status(step, progress_override=None, message='', details=No
     migration_status['current_stage'] = current_stage
     migration_status['progress'] = calculated_progress
     migration_status['message'] = message
+    migration_status['needs_confirmation'] = needs_confirmation
     
     # Add to activity log with better formatting
     if details or message:

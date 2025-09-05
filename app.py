@@ -54,13 +54,13 @@ init_db()
 @login_required
 def index():
     clusters = Cluster.query.all()
-    # Быстрая загрузка - возвращаем только базовую информацию о кластерах
+    # Fast loading - returning only basic information about clusters
     clusters_overview = []
     
     for cluster in clusters:
         clusters_overview.append({
             'cluster': cluster,
-            'overview': None,  # Статистика будет загружена асинхронно
+            'overview': None,  # Statistics will be loaded asynchronously
             'status': 'loading',
             'error': None
         })
@@ -70,7 +70,7 @@ def index():
 @app.route('/cluster/<int:cluster_id>/overview')
 @login_required
 def get_cluster_overview_ajax(cluster_id):
-    """AJAX endpoint для получения статистики кластера"""
+    """AJAX endpoint for getting cluster statistics"""
     cluster = Cluster.query.get_or_404(cluster_id)
     
     try:
@@ -361,6 +361,34 @@ def get_migration_status_endpoint():
     """Endpoint to get current migration status"""
     return jsonify(get_migration_status())
 
+@app.route('/confirm-vm-stop', methods=['POST'])
+@login_required
+def confirm_vm_stop():
+    """Endpoint to confirm VM stop during migration"""
+    try:
+        from disk_service import migration_status
+        migration_status['stop_confirmed'] = True
+        app.logger.warning("Received confirmation to stop VM during migration")
+        return jsonify({'status': 'success', 'message': 'VM stop confirmed'})
+    except Exception as e:
+        error_msg = f"Error confirming VM stop: {str(e)}"
+        app.logger.error(error_msg)
+        return jsonify({'status': 'error', 'message': error_msg}), 500
+
+@app.route('/cancel-migration', methods=['POST'])
+@login_required
+def cancel_migration():
+    """Endpoint to cancel an in-progress migration"""
+    try:
+        from disk_service import migration_status
+        migration_status['active'] = False
+        app.logger.warning("Migration cancelled by user")
+        return jsonify({'status': 'success', 'message': 'Migration cancelled'})
+    except Exception as e:
+        error_msg = f"Error cancelling migration: {str(e)}"
+        app.logger.error(error_msg)
+        return jsonify({'status': 'error', 'message': error_msg}), 500
+
 @app.route('/test-migration', methods=['POST'])
 @login_required
 def test_migration():
@@ -423,4 +451,4 @@ def health_check():
         }), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', debug=True)

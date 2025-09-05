@@ -1,39 +1,39 @@
 """
-Скрипт для обновления схемы базы данных
-Добавляет отсутствующие колонки в существующую базу данных
+Script for updating the database schema
+Adds missing columns to the existing database
 """
 import sqlite3
 import os
 
 def migrate_database():
-    # Путь к базе данных
+    # Database path
     db_path = os.path.join(os.path.dirname(__file__), 'instance', 'proxmox_clusters.db')
     
     if not os.path.exists(db_path):
-        print("База данных не найдена, будет создана автоматически при запуске приложения")
+        print("Database not found, it will be created automatically when the application starts")
         return
     
-    # Подключаемся к базе данных
+    # Connect to the database
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
     try:
-        # Проверяем, есть ли колонка is_first_login в таблице admin_user
+        # Check if the is_first_login column exists in the admin_user table
         cursor.execute("PRAGMA table_info(admin_user)")
         columns = [column[1] for column in cursor.fetchall()]
         
         if 'is_first_login' not in columns:
-            print("Добавляем колонку is_first_login в таблицу admin_user...")
+            print("Adding is_first_login column to the admin_user table...")
             cursor.execute("ALTER TABLE admin_user ADD COLUMN is_first_login BOOLEAN DEFAULT 1")
-            print("Колонка добавлена успешно!")
+            print("Column added successfully!")
         else:
-            print("Колонка is_first_login уже существует")
+            print("The is_first_login column already exists")
         
         conn.commit()
-        print("Миграция завершена успешно!")
+        print("Migration completed successfully!")
         
     except Exception as e:
-        print(f"Ошибка при миграции: {e}")
+        print(f"Migration error: {e}")
         conn.rollback()
     finally:
         conn.close()

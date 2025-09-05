@@ -7,7 +7,7 @@ class Cluster(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     api_host = db.Column(db.String(200), nullable=False)
-    api_token_id = db.Column(db.String(100), nullable=False)  # Старое поле из базы
+    api_token_id = db.Column(db.String(100), nullable=False)  # Legacy field from database
     api_token_secret = db.Column(db.String(500), nullable=False)
     ssh_password = db.Column(db.String(200), nullable=False)
     
@@ -35,18 +35,18 @@ class Cluster(db.Model):
         
         return host
     
-    # Добавляем свойства для совместимости с новым кодом
+    # Add properties for compatibility with new code
     @property
     def api_user(self):
-        # Извлекаем пользователя с realm из api_token_id (формат: user@realm!token_name)
+        # Extract user with realm from api_token_id (format: user@realm!token_name)
         if '@' in self.api_token_id and '!' in self.api_token_id:
-            # Берем все до '!' - это user@realm
+            # Take everything before '!' - this is user@realm
             return self.api_token_id.split('!')[0]
-        return 'root@pam'  # По умолчанию
+        return 'root@pam'  # Default value
     
     @property 
     def api_token_name(self):
-        # Извлекаем имя токена из api_token_id (формат: user@realm!token_name)
+        # Extract token name from api_token_id (format: user@realm!token_name)
         if '!' in self.api_token_id:
             return self.api_token_id.split('!')[-1]
         return self.api_token_id
