@@ -207,7 +207,7 @@ For development, it is recommended to:
 
 ## License
 
-This project is developed for internal use by Panteon company.
+This project use Apache-2.0 license.
 
 ## Support
 
