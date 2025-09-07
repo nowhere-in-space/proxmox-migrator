@@ -116,7 +116,7 @@
                         <div class="mb-3">
                             <label for="destCluster" class="form-label">Destination Cluster</label>
                             <select class="form-select" id="destCluster" required>
-                                <option value="">Select destination cluster...</option>
+                                <option value="">Destination cluster...</option>
                                 {% for dest_cluster in dest_clusters %}
                                     <option value="{{ dest_cluster.id }}">{{ dest_cluster.name }}</option>
                                 {% endfor %}
@@ -126,7 +126,7 @@
                         <div class="mb-3">
                             <label for="destNode" class="form-label">Destination Node</label>
                             <select class="form-select" id="destNode" required>
-                                <option value="">Select destination node...</option>
+                                <option value="">Destination node...</option>
                             </select>
                             <small class="form-text text-muted">Loading nodes...</small>
                         </div>
@@ -397,7 +397,7 @@
                     </div>
                     <div class="col-md-6">
                         <select class="form-select storage-mapping" data-disk="${diskInfo.disk}" required>
-                            <option value="">Select destination storage...</option>
+                            <option value="">Destination storage...</option>
                         </select>
                     </div>
                     <div class="col-md-2">
@@ -437,7 +437,7 @@
                     </div>
                     <div class="col-md-6">
                         <select class="form-select network-mapping" data-interface="${netInfo.interface}" required>
-                            <option value="">Select destination bridge...</option>
+                            <option value="">Destination bridge...</option>
                         </select>
                     </div>
                     <div class="col-md-2">
@@ -465,7 +465,7 @@
         function resetResourceSelects() {
             const nodeSelect = document.getElementById('destNode');
             
-            nodeSelect.innerHTML = '<option value="">Select destination node...</option>';
+            nodeSelect.innerHTML = '<option value="">Destination node...</option>';
             
             // Hide mapping sections
             document.getElementById('storageMappingSection').style.display = 'none';
@@ -524,7 +524,7 @@
             
             networkSelects.forEach(select => {
                 const currentValue = select.value;
-                select.innerHTML = '<option value="">Select destination bridge...</option>';
+                select.innerHTML = '<option value="">Destination bridge...</option>';
                 
                 if (window.destinationBridges) {
                     window.destinationBridges.forEach(bridge => {
@@ -548,7 +548,7 @@
             
             storageSelects.forEach(select => {
                 const currentValue = select.value;
-                select.innerHTML = '<option value="">Select destination storage...</option>';
+                select.innerHTML = '<option value="">Destination storage...</option>';
                 
                 if (window.clusterResources && window.clusterResources.storage_pools) {
                     window.clusterResources.storage_pools.forEach(storage => {
