@@ -14,3 +14,9 @@ services:
       - ./logs:/app/logs
       - ./temp_migration:/app/temp_migration
     restart: unless-stopped
+    networks:
+      - proxmox-net
+
+networks:
+  proxmox-net:
+    driver: bridge
