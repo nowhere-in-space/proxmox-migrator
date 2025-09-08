@@ -2,7 +2,7 @@
 
 Web application for migrating virtual machines between Proxmox VE clusters.
 
-![Dashboard](https://github.com/nowhere-in-space/proxmox-migrator/blob/main/images/dashboard.png?raw=true)
+![Dashboard](images/dashboard.png)
 
 ## Description
 
@@ -13,11 +13,11 @@ This tool allows you to migrate virtual machines between different Proxmox clust
 - 🔐 Authentication system with administrator password
 - 🖥️ Web interface for cluster and migration management
 - 📊 Display VM lists with their characteristics
-![VM list](https://github.com/nowhere-in-space/proxmox-migrator/blob/main/images/vm_list.png?raw=true)
+![VM list](images/vm_list.png)
 - 🔄 Migration between different storage types
-![VM list](https://github.com/nowhere-in-space/proxmox-migrator/blob/main/images/migration_select.png?raw=true)
+![VM list](images/migration_select.png)
 - 📋 Real-time migration progress tracking
-![VM list](https://github.com/nowhere-in-space/proxmox-migrator/blob/main/images/migration_process.png?raw=true)
+![VM list](images/migration_process.png)
 - 🌐 Network interface configuration for target cluster
 
 ## System Requirements
