@@ -21,12 +21,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create directories and set permissions
-RUN mkdir -p logs temp_migration instance && \
-    chown -R app:app /app
-
 # Switch to non-root user
 USER app
+
+# Create directories and set permissions
+RUN mkdir -p logs temp_migration instance && \
+    chown -R app:app /app && \
 
 # Set environment variables
 ENV FLASK_APP=app.py

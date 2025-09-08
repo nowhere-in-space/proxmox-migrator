@@ -30,7 +30,7 @@ This tool allows you to migrate virtual machines between different Proxmox clust
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/nowhere-in-space/proxmox-migrator
 cd proxmox-migrator
 ```
 
