@@ -21,9 +21,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create directories and set permissions
-RUN mkdir -p logs temp_migration instance && \
-    chmod 777 logs temp_migration instance
+# Create directories
+RUN mkdir -p logs temp_migration instance
 
 # Switch to non-root user
 USER app

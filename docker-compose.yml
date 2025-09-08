@@ -16,6 +16,14 @@ services:
     restart: unless-stopped
     networks:
       - proxmox-net
+  init-permissions:
+    image: alpine
+    command: sh -c "chown -R 1000:1000 /app && chmod -R 775 /app"
+    volumes:
+      - ./logs:/app/logs
+      - ./temp_migration:/app/temp_migration
+      - ./instance:/app/instance
+    restart: "no"
 
 networks:
   proxmox-net:
