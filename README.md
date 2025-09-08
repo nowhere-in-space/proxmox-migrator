@@ -168,7 +168,7 @@ The Docker container includes a health check endpoint at `/health` that verifies
 - `nfs` - Network File System
 - `cifs` - Common Internet File System
 
-### Block-based Storage  
+### Block-based Storage (partially tested)
 - `lvm` - Logical Volume Manager
 - `lvmthin` - LVM Thin Provisioning
 - `zfs` - ZFS
