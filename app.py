@@ -16,6 +16,7 @@ from proxmox_client import connect_to_proxmox, get_cluster_overview
 from migration_service import migrate_vm
 from disk_service import get_migration_status
 from utils import format_size, get_vm_info
+from database_migrations import run_database_migrations
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -43,9 +44,19 @@ logging.basicConfig(
 def init_db():
     try:
         with app.app_context():
+            # Run database migrations first
+            db_path = os.path.join(app.instance_path, 'proxmox_clusters.db')
+            if not run_database_migrations(db_path):
+                app.logger.error("Database migrations failed")
+                return False
+            
+            # Create all tables
             db.create_all()
+            app.logger.info("Database initialized successfully")
+            return True
     except Exception as e:
         app.logger.error(f"Database initialization error: {e}")
+        return False
 
 # Initialize database
 init_db()

@@ -54,11 +54,6 @@ SECRET_KEY=your-secret-key-here
 ADMIN_PASSWORD=your-admin-password
 ```
 
-5. Run database migration (if upgrading from previous version):
-```bash
-python migrate_db.py
-```
-
 ## Running
 
 ### Local Development
@@ -148,19 +143,28 @@ The Docker container includes a health check endpoint at `/health` that verifies
 ## Project Structure
 
 ```
-├── app.py                 # Main Flask application
-├── auth.py               # Authentication module
-├── config.py             # Application configuration
-├── models.py             # Database models
-├── proxmox_client.py     # Proxmox API client
-├── migration_service.py  # VM migration service
-├── disk_service.py       # Disk operations service
-├── utils.py              # Utility functions
-├── templates/            # HTML templates
-├── instance/             # Database files
-├── logs/                 # Application logs
-└── temp_migration/       # Temporary migration files
+├── app.py                    # Main Flask application with auto-migrations
+├── auth.py                   # Authentication module
+├── config.py                 # Application configuration
+├── models.py                 # Database models (SQLAlchemy)
+├── database_migrations.py    # Automatic database schema migrations
+├── proxmox_client.py         # Proxmox API client
+├── migration_service.py      # VM migration service
+├── disk_service.py           # Disk operations service
+├── utils.py                  # Utility functions
+├── templates/                # HTML templates (Jinja2)
+├── instance/                 # Database files (SQLite)
+├── logs/                     # Application logs
+└── temp_migration/           # Temporary migration files
 ```
+
+### 🔄 **Automatic Database Migrations**
+
+The application includes an automatic database migration system that:
+- **Runs on startup**: Migrations are applied automatically when the application starts
+- **Version tracking**: Uses `migration_version` table to track applied migrations
+- **Safe upgrades**: Ensures schema changes are applied incrementally
+- **No manual intervention**: No need to run separate migration scripts
 
 ## Supported Storage Types
 
