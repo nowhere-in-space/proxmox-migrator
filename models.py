@@ -10,6 +10,7 @@ class Cluster(db.Model):
     api_token_id = db.Column(db.String(100), nullable=False)  # Legacy field from database
     api_token_secret = db.Column(db.String(500), nullable=False)
     ssh_password = db.Column(db.String(200), nullable=False)
+    ssh_port = db.Column(db.Integer, nullable=False, default=22)  # SSH port with default 22
     
     def __init__(self, **kwargs):
         # Normalize api_host before saving

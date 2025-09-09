@@ -185,6 +185,12 @@ def update_migration_status(step, progress_override=None, message='', details=No
     else:
         calculated_progress = calculate_stage_progress(current_stage, stage_progress)
     
+    # Ensure progress is always an integer and never goes backwards
+    calculated_progress = int(round(calculated_progress))
+    current_progress = migration_status.get('progress', 0)
+    if calculated_progress < current_progress:
+        calculated_progress = current_progress
+    
     # Update status
     migration_status['step'] = step
     migration_status['current_stage'] = current_stage
@@ -192,41 +198,41 @@ def update_migration_status(step, progress_override=None, message='', details=No
     migration_status['message'] = message
     migration_status['needs_confirmation'] = needs_confirmation
     
-    # Add to activity log with better formatting
-    if details or message:
+    # Add log entry for this migration only
+    if message:
         timestamp = time.strftime("%H:%M:%S")
         
-        # Create unique activity entry
-        activity_text = details if details else message
-        activity_entry = {
+        log_entry = {
             'timestamp': timestamp,
-            'message': activity_text,
-            'stage': MIGRATION_STAGES.get(current_stage, {}).get('name', current_stage),
-            'progress': int(calculated_progress),
-            'key': f"{step}_{int(calculated_progress)}_{timestamp.replace(':', '')}"
+            'message': message,
+            'step': step,
+            'progress': calculated_progress
         }
         
-        # Prevent duplicate entries by checking recent entries
-        recent_entries = migration_status['details'][-3:] if migration_status['details'] else []
-        is_duplicate = any(
-            entry.get('message') == activity_text and 
-            abs(entry.get('progress', 0) - int(calculated_progress)) <= 1
-            for entry in recent_entries
-        )
+        # Initialize current migration log if not exists
+        if 'current_migration_log' not in migration_status:
+            migration_status['current_migration_log'] = []
         
-        if not is_duplicate:
-            migration_status['details'].append(activity_entry)
-            
-            # Limit to last 30 entries
-            if len(migration_status['details']) > 30:
-                migration_status['details'] = migration_status['details'][-30:]
+        migration_status['current_migration_log'].append(log_entry)
+        
+        # Limit to last 50 entries for this migration
+        if len(migration_status['current_migration_log']) > 50:
+            migration_status['current_migration_log'] = migration_status['current_migration_log'][-50:]
     
-    logger.warning(f"Migration Status: {current_stage} -> {step} - {calculated_progress:.1f}% - {message}")
+    logger.warning(f"Migration Status: {current_stage} -> {step} - {calculated_progress}% - {message}")
 
 def get_migration_status():
     """Get current migration status"""
     global migration_status
-    return migration_status.copy()
+    status = migration_status.copy()
+    
+    # Replace old details with current migration log
+    if 'current_migration_log' in status:
+        status['details'] = status['current_migration_log']
+    else:
+        status['details'] = []
+    
+    return status
 
 def check_disk_space(ssh, path, required_size_gb):
     """Check if there's enough disk space at the specified path"""
@@ -346,6 +352,43 @@ def copy_disk_data(source_cluster, dest_cluster, data, disk_file, ssh, sftp, bas
         logger.error(f"Disk file: {disk_file}")
         raise
 
+def get_storage_path(proxmox_client, node, storage_name, storage_type):
+    """Get the actual path of storage from Proxmox API"""
+    try:
+        # Try to get storage configuration from cluster first
+        try:
+            storage_config = proxmox_client.storage(storage_name).get()
+            logger.warning(f"Got storage config from cluster API: {storage_config}")
+        except:
+            # Fallback to node-specific storage config
+            storage_config = proxmox_client.nodes(node).storage(storage_name).get()
+            logger.warning(f"Got storage config from node API: {storage_config}")
+        
+        if 'path' in storage_config:
+            actual_path = storage_config['path']
+            logger.warning(f"Found actual storage path for {storage_name}: {actual_path}")
+            return [actual_path, f"{actual_path}/images"]
+        else:
+            logger.warning(f"No path found in storage config for {storage_name}, config keys: {list(storage_config.keys())}")
+            
+    except Exception as e:
+        logger.warning(f"Could not get storage config for {storage_name}: {e}")
+    
+    # Fallback to common paths
+    storage_paths = {
+        'dir': [f"/var/lib/vz/images", f"/var/lib/vz"],
+        'glusterfs': [f"/mnt/pve/{storage_name}", f"/var/lib/vz"],
+        'nfs': [f"/mnt/pve/{storage_name}", f"/var/lib/vz"],
+        'cifs': [f"/mnt/pve/{storage_name}", f"/var/lib/vz"]
+    }
+    
+    # Special handling for known storage names
+    if storage_name == 'data':
+        logger.warning(f"Using known path for storage 'data': /mnt/data")
+        return ["/mnt/data", "/mnt/data/images"]
+    
+    return storage_paths.get(storage_type, [f"/var/lib/vz/images", f"/var/lib/vz"])
+
 def copy_file_based_storage(source_cluster, dest_cluster, data, storage_name, disk_name, disk_path, ssh, sftp, storage_type, base_progress=0, dest_storage=None, copy_id="UNKNOWN"):
     """Copy disk files from file-based storage (dir, glusterfs, nfs) directly without temp files."""
     try:
@@ -361,18 +404,13 @@ def copy_file_based_storage(source_cluster, dest_cluster, data, storage_name, di
                                details=f"Using direct file transfer method", stage_progress=75)
         logger.warning(f"Using direct file transfer for {storage_type} storage")
         
-        # Common paths for different storage types
-        storage_paths = {
-            'dir': [f"/var/lib/vz/images", f"/var/lib/vz"],
-            'glusterfs': [f"/mnt/pve/{storage_name}", f"/var/lib/vz"],
-            'nfs': [f"/mnt/pve/{storage_name}", f"/var/lib/vz"],
-            'cifs': [f"/mnt/pve/{storage_name}", f"/var/lib/vz"]
-        }
-        
-        search_paths = storage_paths.get(storage_type, [f"/var/lib/vz/images", f"/var/lib/vz"])
+        # Get actual storage paths from Proxmox API
+        from proxmox_client import connect_to_proxmox
+        source_proxmox = connect_to_proxmox(source_cluster)
+        search_paths = get_storage_path(source_proxmox, data['source_node'], storage_name, storage_type)
         
         update_migration_status('disk_locating', message=f"Locating disk file on {storage_type} storage...", 
-                               details=f"Determining disk file path", stage_progress=78)
+                               details=f"Searching in storage paths: {search_paths}", stage_progress=78)
         
         # Try to find the disk file
         source_path = None
@@ -712,8 +750,15 @@ def copy_file_based_storage(source_cluster, dest_cluster, data, storage_name, di
                         break
                 
                 if disk_part and disk_number:
-                    # Create new filename with target VM ID
-                    new_filename = f"vm-{data['vmid']}-{disk_part}-{disk_number}.qcow2"
+                    # Determine the format from the source filename (passed in disk_filename)
+                    source_format = 'qcow2'  # default
+                    if disk_filename.endswith('.raw'):
+                        source_format = 'raw'
+                    elif disk_filename.endswith('.qcow2'):
+                        source_format = 'qcow2'
+                    
+                    # Create new filename with target VM ID and preserve source format
+                    new_filename = f"vm-{data['vmid']}-{disk_part}-{disk_number}.{source_format}"
                     # Use Unix-style path separator for remote server
                     new_dest_path = f"{os.path.dirname(dest_path).replace(chr(92), '/')}/{new_filename}"
                     
@@ -1032,7 +1077,15 @@ def copy_block_based_storage(source_cluster, dest_cluster, data, storage_name, d
                             break
                     
                     if disk_part and disk_number:
-                        new_filename = f"vm-{data['vmid']}-{disk_part}-{disk_number}.qcow2"
+                        # Determine the format from the source filename (passed in disk_name)
+                        source_format = 'qcow2'  # default
+                        if disk_name.endswith('.raw'):
+                            source_format = 'raw'
+                        elif disk_name.endswith('.qcow2'):
+                            source_format = 'qcow2'
+                        
+                        # Create new filename with target VM ID and preserve source format
+                        new_filename = f"vm-{data['vmid']}-{disk_part}-{disk_number}.{source_format}"
                         # Use Unix-style path separator for remote server
                         new_dest_path = f"{os.path.dirname(dest_path).replace(chr(92), '/')}/{new_filename}"
                         

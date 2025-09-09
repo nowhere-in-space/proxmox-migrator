@@ -20,6 +20,7 @@ def migrate_vm(data):
         migration_status['total_disks'] = 0
         migration_status['needs_confirmation'] = False
         migration_status['stop_confirmed'] = False
+        migration_status['current_migration_log'] = []  # Clear log for new migration
         
         # Initialize migration status using update function
         update_migration_status('initializing', message='Starting migration process...', details='Migration initiated')
@@ -118,10 +119,11 @@ def migrate_vm(data):
             
             # Extract hostname from api_host (remove port if present)
             ssh_host = source_cluster.api_host.split(':')[0]
-            update_migration_status('ssh_connecting', message=f"Connecting via SSH to {ssh_host}...", stage_progress=30)
-            logger.warning(f"Connecting to source cluster via SSH: {ssh_host}")
+            ssh_port = getattr(source_cluster, 'ssh_port', 22)  # Default to 22 if not set
+            update_migration_status('ssh_connecting', message=f"Connecting via SSH to {ssh_host}:{ssh_port}...", stage_progress=30)
+            logger.warning(f"Connecting to source cluster via SSH: {ssh_host}:{ssh_port}")
             try:
-                ssh.connect(ssh_host, username='root', password=source_cluster.ssh_password)
+                ssh.connect(ssh_host, port=ssh_port, username='root', password=source_cluster.ssh_password)
                 update_migration_status('ssh_connected', message='SSH connection established successfully', 
                                       details='Ready for data transfer', stage_progress=100)
                 logger.info(f"Successfully connected to source cluster via SSH")
@@ -146,7 +148,8 @@ def migrate_vm(data):
             vm_config_without_disks = vm_config.copy()
             
             for key, value in vm_config.items():
-                if key.startswith(('scsi', 'virtio', 'ide', 'sata')) and ':' in str(value):
+                # Include standard data disks plus EFI / TPM state disks
+                if any(key.startswith(prefix) for prefix in ('scsi', 'virtio', 'ide', 'sata', 'efidisk', 'tpmstate')) and ':' in str(value):
                     disk_configs[key] = value
                     # Remove disk from VM config for initial creation
                     del vm_config_without_disks[key]
@@ -164,17 +167,33 @@ def migrate_vm(data):
             max_attempts = 100  # Increased from 10 to 100 attempts
             
             for attempt in range(max_attempts):
+                vm_exists = False
+                
+                # Check if VM with this ID exists on ANY node in the cluster
                 try:
-                    # Check if VM with this ID exists
-                    existing_vm = dest_proxmox.nodes(data['dest_node']).qemu(target_vmid).config.get()
-                    logger.warning(f"VM {target_vmid} already exists, trying next ID (attempt {attempt + 1}/{max_attempts})")
+                    cluster_resources = dest_proxmox.cluster.resources.get()
+                    for resource in cluster_resources:
+                        if resource.get('type') == 'qemu' and str(resource.get('vmid')) == str(target_vmid):
+                            vm_exists = True
+                            logger.warning(f"VM {target_vmid} already exists on node {resource.get('node')}, trying next ID (attempt {attempt + 1}/{max_attempts})")
+                            break
+                except Exception as e:
+                    logger.warning(f"Could not check cluster resources, falling back to node-specific check: {e}")
+                    # Fallback to checking specific node if cluster resource check fails
+                    try:
+                        existing_vm = dest_proxmox.nodes(data['dest_node']).qemu(target_vmid).config.get()
+                        vm_exists = True
+                        logger.warning(f"VM {target_vmid} already exists on target node, trying next ID (attempt {attempt + 1}/{max_attempts})")
+                    except:
+                        vm_exists = False
+                
+                if vm_exists:
                     target_vmid = str(int(target_vmid) + 1)
-                    
                     progress = 20 + (attempt / max_attempts) * 30  # 20-50% for ID search
                     update_migration_status('vm_id_check', message=f'VM ID {target_vmid} is taken, checking next...', 
                                           stage_progress=progress)
-                except Exception as e:
-                    # VM doesn't exist, we can use this ID
+                else:
+                    # VM doesn't exist anywhere in cluster, we can use this ID
                     update_migration_status('vm_id_available', message=f"VM ID {target_vmid} is available", 
                                           details=f"Will use VM ID {target_vmid} for migration", stage_progress=60)
                     logger.warning(f"VM {target_vmid} is available, using it for migration")
@@ -221,10 +240,36 @@ def migrate_vm(data):
             logger.warning(f"Successfully created VM {target_vmid} without disks")
             
             # Now process each disk separately
-            total_disks = len(disk_configs)
+            # Filter to only process disks that exist in VM config AND are mapped by user
+            storage_mappings = data.get('storage_mappings', {})
+            disks_to_migrate = {}
+            
+            # Only include disks that exist in VM config AND have storage mapping
+            for disk_key, disk_config in disk_configs.items():
+                if disk_key in storage_mappings:
+                    disks_to_migrate[disk_key] = disk_config
+                    logger.warning(f"Will migrate disk {disk_key}: {disk_config}")
+                else:
+                    logger.warning(f"Skipping disk {disk_key} - not in storage mappings")
+            
+            # Also check if user selected disks that don't exist in VM
+            for disk_key in storage_mappings:
+                if disk_key not in disk_configs:
+                    logger.warning(f"Warning: User selected disk {disk_key} for migration, but it doesn't exist in VM config")
+            
+            total_disks = len(disks_to_migrate)
             current_disk = 0
             
-            for disk_key, disk_config in disk_configs.items():
+            # Set total disks for progress calculation
+            migration_status['total_disks'] = total_disks
+            
+            if total_disks == 0:
+                logger.warning("No disks to migrate - VM created without disk migration")
+                update_migration_status('migration_complete', message='VM migration completed', 
+                                      details='VM created successfully (no disks to migrate)', stage_progress=100)
+                return {"success": True, "message": f"VM {target_vmid} created successfully without disk migration"}
+            
+            for disk_key, disk_config in disks_to_migrate.items():
                 current_disk += 1
                 migration_status['current_disk'] = current_disk
                 
@@ -246,37 +291,60 @@ def migrate_vm(data):
                         logger.warning(f"Skipping CD-ROM disk {disk_key}")
                         continue
                     
-                    # Extract size from options or estimate from disk file
-                    size = "20G"  # default size
+                    # Extract size from options (convert to Proxmox API compatible format)
+                    size = "20G"  # default size only for regular disks without size info
+                    
+                    # First priority: get size from disk config options
                     if 'size=' in options:
                         for opt in options.split(','):
                             if opt.startswith('size='):
                                 raw_size = opt.split('=')[1]
-                                # Ensure size has proper unit
-                                if raw_size.isdigit():
-                                    # If it's just a number, assume bytes and convert to GB
-                                    size_gb = int(raw_size) // (1024**3)
-                                    if size_gb < 1:
-                                        size_gb = 1
-                                    size = f"{size_gb}G"
-                                elif raw_size.endswith(('K', 'M', 'G', 'T')):
+                                # Convert size to Proxmox API compatible format (whole megabytes)
+                                if raw_size.endswith('K'):
+                                    # Convert kilobytes to megabytes (minimum 1M for Proxmox API)
+                                    kb_value = int(raw_size[:-1])
+                                    mb_value = max(1, (kb_value + 1023) // 1024)  # Round up to nearest MB
+                                    size = f"{mb_value}M"
+                                    logger.warning(f"Converted size {raw_size} to {size} for Proxmox API")
+                                elif raw_size.endswith(('M', 'G', 'T')):
                                     size = raw_size
-                                else:
-                                    # Try to parse as bytes
-                                    try:
-                                        size_bytes = int(raw_size)
+                                    logger.warning(f"Using size from config: {size}")
+                                elif raw_size.isdigit():
+                                    # Convert bytes to appropriate unit
+                                    size_bytes = int(raw_size)
+                                    if size_bytes < 1024**2:  # Less than 1MB
+                                        mb_value = max(1, (size_bytes + 1024**2 - 1) // (1024**2))  # Round up
+                                        size = f"{mb_value}M"
+                                    elif size_bytes < 1024**3:  # Less than 1GB  
+                                        size = f"{size_bytes // (1024**2)}M"
+                                    else:
                                         size_gb = max(1, size_bytes // (1024**3))
                                         size = f"{size_gb}G"
-                                    except ValueError:
-                                        size = "20G"  # fallback
+                                    logger.warning(f"Converted byte size {raw_size} to {size}")
+                                break
+                    
+                    # Special handling for EFI disks with efitype parameter (only if no size found)
+                    if disk_key.startswith('efidisk') and 'efitype=' in options and size == "20G":
+                        for opt in options.split(','):
+                            if opt.startswith('efitype='):
+                                efi_type = opt.split('=')[1].upper()
+                                if efi_type.endswith('M'):
+                                    size = efi_type
+                                    logger.warning(f"Using efitype size: {size}")
                                 break
                     
                     # Determine destination storage for this disk
                     dest_storage = data.get('storage_mappings', {}).get(disk_key)
                     if not dest_storage:
-                        # Fallback to old behavior if no mapping provided
-                        dest_storage = data.get('dest_storage', 'local')
-                        logger.warning(f"No storage mapping for {disk_key}, using fallback: {dest_storage}")
+                        # Improved fallback: if user provided at least one mapping, reuse its first storage for unmapped disks
+                        if data.get('storage_mappings'):
+                            first_mapped_storage = next(iter(data['storage_mappings'].values()))
+                            dest_storage = first_mapped_storage
+                            logger.warning(f"No storage mapping for {disk_key}, reusing first mapped storage: {dest_storage}")
+                        else:
+                            # Fallback to old behavior if no mapping provided
+                            dest_storage = data.get('dest_storage', 'local')
+                            logger.warning(f"No storage mapping for {disk_key}, using fallback dest_storage/local: {dest_storage}")
                     
                     update_migration_status('disk_creating', message=f"Creating disk {disk_key} ({size}) on storage {dest_storage}...", 
                                           details=f"Allocating disk space...", stage_progress=20)
@@ -285,10 +353,26 @@ def migrate_vm(data):
                     
                     # Create disk on destination storage
                     try:
-                        # Extract disk number from key (scsi0 -> 0, virtio1 -> 1, etc.)
-                        disk_num = ''.join(filter(str.isdigit, disk_key))
-                        if not disk_num:
-                            disk_num = '0'
+                        # Extract original disk identifier from source filename to preserve naming
+                        original_disk_identifier = None
+                        if '/' in disk_file:
+                            # For paths like "102/vm-102-disk-1.qcow2" or "vm-102-disk-0"
+                            filename_part = disk_file.split('/')[-1]  # Get last part after /
+                            if filename_part.startswith('vm-') and '-disk-' in filename_part:
+                                # Extract the disk number from original filename
+                                parts = filename_part.split('-disk-')
+                                if len(parts) > 1:
+                                    # Get number and extension if present (e.g., "1.qcow2" or "0")
+                                    disk_part = parts[1].split('.')[0]  # Remove extension
+                                    if disk_part.isdigit():
+                                        original_disk_identifier = disk_part
+                        
+                        # Fallback: extract disk number from disk key (scsi0 -> 0, efidisk0 -> 0, etc.)
+                        if not original_disk_identifier:
+                            disk_num = ''.join(filter(str.isdigit, disk_key))
+                            original_disk_identifier = disk_num if disk_num else '0'
+                        
+                        logger.warning(f"Using disk identifier: {original_disk_identifier} (from source: {disk_file})")
                         
                         # Get storage type to determine the correct disk creation method
                         try:
@@ -309,8 +393,21 @@ def migrate_vm(data):
                         
                         if storage_type in ['lvmthin', 'lvm', 'zfspool']:
                             # For LVM/ZFS storage, create with generated filename (no extension)
-                            disk_filename = f"vm-{target_vmid}-disk-{disk_num}"
+                            disk_filename = f"vm-{target_vmid}-disk-{original_disk_identifier}"
                             logger.warning(f"Creating LVM/ZFS disk with filename: {disk_filename}")
+                            
+                            # Check if disk already exists and delete it
+                            try:
+                                existing_content = dest_proxmox.nodes(data['dest_node']).storage(dest_storage).content.get()
+                                for content in existing_content:
+                                    volid = content.get('volid', '')
+                                    # Check for exact match or conflicting disk with same number but different format
+                                    if volid.endswith(disk_filename) or f"vm-{target_vmid}-disk-{original_disk_identifier}." in volid:
+                                        logger.warning(f"Found existing/conflicting disk {volid}, deleting it")
+                                        dest_proxmox.nodes(data['dest_node']).storage(dest_storage).content(volid).delete()
+                            except Exception as e:
+                                logger.warning(f"Could not check/delete existing disk: {e}")
+                            
                             dest_proxmox.nodes(data['dest_node']).storage(dest_storage).content.create(
                                 vmid=target_vmid,
                                 filename=disk_filename,
@@ -320,18 +417,43 @@ def migrate_vm(data):
                             disk_name = disk_filename
                             
                         else:
-                            # For file-based storage (dir, nfs, etc.), detect appropriate format
-                            # Check what format the original disk uses
+                            # For file-based storage (dir, nfs, etc.), detect format from source disk
                             original_format = 'qcow2'  # default format for file-based storage
+                            
+                            # First try to get format from source disk filename
+                            if '/' in disk_file and '.' in disk_file:
+                                # Extract format from file extension (e.g., vm-101-disk-1.qcow2 -> qcow2)
+                                file_parts = disk_file.split('.')
+                                if len(file_parts) > 1:
+                                    potential_format = file_parts[-1]
+                                    if potential_format in ['qcow2', 'raw', 'vmdk', 'vdi']:
+                                        original_format = potential_format
+                                        logger.warning(f"Detected format from source filename: {original_format}")
+                            
+                            # Check format option in disk config (overrides filename detection)
                             if ',' in disk_config:
                                 for option in disk_config.split(',')[1:]:
                                     if option.startswith('format='):
                                         original_format = option.split('=')[1]
+                                        logger.warning(f"Found explicit format option: {original_format}")
                                         break
                             
-                            # Use original format or qcow2 for file-based storage
-                            disk_filename = f"vm-{target_vmid}-disk-{disk_num}.{original_format}"
+                            # Use original format and preserve disk numbering from source
+                            disk_filename = f"vm-{target_vmid}-disk-{original_disk_identifier}.{original_format}"
                             logger.warning(f"Creating file-based disk with filename: {disk_filename}, format: {original_format}")
+                            
+                            # Check if disk already exists and delete it
+                            try:
+                                existing_content = dest_proxmox.nodes(data['dest_node']).storage(dest_storage).content.get()
+                                for content in existing_content:
+                                    volid = content.get('volid', '')
+                                    # Check for exact match or conflicting disk with same number but different format
+                                    if volid.endswith(disk_filename) or f"vm-{target_vmid}-disk-{original_disk_identifier}." in volid:
+                                        logger.warning(f"Found existing/conflicting disk {volid}, deleting it")
+                                        dest_proxmox.nodes(data['dest_node']).storage(dest_storage).content(volid).delete()
+                            except Exception as e:
+                                logger.warning(f"Could not check/delete existing disk: {e}")
+                            
                             dest_proxmox.nodes(data['dest_node']).storage(dest_storage).content.create(
                                 vmid=target_vmid,
                                 filename=disk_filename,
@@ -368,7 +490,17 @@ def migrate_vm(data):
                         new_disk_config = f"{dest_storage}:{disk_name}"
                         if options:
                             # Filter out size option since disk is already created
-                            filtered_options = [opt for opt in options.split(',') if not opt.startswith('size=')]
+                            # For EFI/TPM disks, preserve all important options except size
+                            filtered_options = []
+                            for opt in options.split(','):
+                                if not opt.startswith('size='):
+                                    # For special disks (EFI/TPM), keep all options except size
+                                    if disk_key.startswith(('efidisk', 'tpmstate')):
+                                        filtered_options.append(opt)
+                                    # For regular disks, filter out some unnecessary options
+                                    elif not opt.startswith(('path=', 'file=')):
+                                        filtered_options.append(opt)
+                            
                             if filtered_options:
                                 new_disk_config += ',' + ','.join(filtered_options)
                         
@@ -448,6 +580,56 @@ def migrate_vm(data):
             
         except Exception as e:
             error_msg = f"Error during migration: {str(e)}"
+            
+            # Cleanup: Delete partially created VM and disks on destination if they exist
+            try:
+                if 'target_vmid' in locals() and 'dest_proxmox' in locals() and 'data' in locals():
+                    update_migration_status('cleanup_error', message='Cleaning up partially created VM and disks...', 
+                                          details=f'Deleting VM {target_vmid} and associated disks from destination cluster', stage_progress=25)
+                    logger.warning(f"Error occurred, attempting to cleanup VM {target_vmid} on destination")
+                    
+                    # Try to delete the partially created VM (this also removes attached disks)
+                    try:
+                        dest_proxmox.nodes(data['dest_node']).qemu(target_vmid).delete()
+                        logger.warning(f"Successfully deleted partially created VM {target_vmid} from destination")
+                        update_migration_status('cleanup_vm_done', message='VM cleanup completed', 
+                                              details=f'Removed incomplete VM {target_vmid}', stage_progress=75)
+                    except Exception as cleanup_error:
+                        logger.warning(f"Could not delete VM {target_vmid} during cleanup: {cleanup_error}")
+                        # Continue with manual disk cleanup if VM deletion failed
+                    
+                    # Additional cleanup: try to remove any orphaned disks for this VMID
+                    try:
+                        if 'disk_configs' in locals():
+                            # Check all possible storage locations
+                            storage_list = data.get('storage_mappings', {})
+                            storages_to_check = set(storage_list.values()) if storage_list else {data.get('dest_storage', 'local')}
+                            
+                            for storage_name in storages_to_check:
+                                try:
+                                    storage_content = dest_proxmox.nodes(data['dest_node']).storage(storage_name).content.get()
+                                    for content in storage_content:
+                                        volid = content.get('volid', '')
+                                        # Look for disks that belong to our target VMID
+                                        if f"vm-{target_vmid}-disk-" in volid:
+                                            try:
+                                                dest_proxmox.nodes(data['dest_node']).storage(storage_name).content(volid).delete()
+                                                logger.warning(f"Deleted orphaned disk: {volid}")
+                                            except Exception as disk_del_error:
+                                                logger.warning(f"Could not delete orphaned disk {volid}: {disk_del_error}")
+                                except Exception as storage_check_error:
+                                    logger.warning(f"Could not check storage {storage_name} for orphaned disks: {storage_check_error}")
+                                        
+                        update_migration_status('cleanup_complete', message='Cleanup completed', 
+                                              details=f'Removed incomplete VM {target_vmid} and orphaned disks', stage_progress=100)
+                    except Exception as disk_cleanup_error:
+                        logger.warning(f"Exception during disk cleanup: {disk_cleanup_error}")
+                        pass
+                        
+            except Exception as cleanup_ex:
+                logger.warning(f"Exception during cleanup: {cleanup_ex}")
+                pass
+            
             migration_status['active'] = False
             migration_status['step'] = 'error'
             migration_status['message'] = error_msg
@@ -467,90 +649,3 @@ def migrate_vm(data):
         logger.exception("Full error traceback:")
         return {'status': 'error', 'message': error_msg}
 
-def start_test_migration():
-    """Test function to simulate migration for demo purposes"""
-    try:
-        # Clear any previous migration details and reset counters
-        migration_status['details'] = []
-        migration_status['current_disk'] = 0
-        migration_status['total_disks'] = 2  # Simulate 2 disks
-        
-        # Initialize using the update function
-        update_migration_status('initializing', message='Starting test migration...', details='Initializing test migration')
-        
-        # Get status and set additional fields
-        migration_status['active'] = True
-        migration_status['vmid'] = '999'
-        
-        test_steps = [
-            ('validation', 'Validating input data...', 'Input validation complete', 50),
-            ('connecting', 'Connecting to source cluster...', 'Connected to source', 80),
-            ('vm_info', 'Getting VM information...', 'VM info retrieved', 100),
-            ('ssh_connection', 'Establishing SSH connection...', 'SSH connected', 70),
-            ('vm_stopped', 'VM stopped successfully', 'VM ready for migration', 100),
-            ('dest_connecting', 'Connecting to destination cluster...', 'Connected to destination', 90),
-            ('config_reading', 'Reading VM configuration...', 'Config read successfully', 80),
-            ('vm_id_available', 'VM ID 999 is available', 'Using VM ID 999', 100),
-            ('vm_creating', 'Creating VM on destination...', 'VM created without disks', 50),
-            ('vm_created', 'VM created successfully', 'VM ready for disks', 100),
-        ]
-        
-        # Execute basic steps
-        for step, message, detail, stage_progress in test_steps:
-            status = get_migration_status()
-            if not status.get('active'):
-                break
-                
-            update_migration_status(step, message=message, details=detail, stage_progress=stage_progress)
-            migration_status['active'] = True  # Keep active flag
-            time.sleep(0.8)  # Simulate work
-        
-        # Simulate disk migration
-        for disk_num in range(1, 3):  # 2 disks
-            migration_status['current_disk'] = disk_num
-            disk_name = f"scsi{disk_num-1}"
-            
-            disk_steps = [
-                ('disk_processing', f'Processing disk {disk_num}/2: {disk_name}...', f'Disk {disk_name} configuration', 5),
-                ('disk_creating', f'Creating disk {disk_name} (20G)...', 'Allocating disk space', 20),
-                ('disk_created', f'Disk {disk_name} created successfully', 'Disk storage allocated', 40),
-                ('disk_attaching', f'Attaching disk {disk_name} to VM...', f'Attaching disk {disk_name}', 50),
-                ('disk_attached', f'Disk {disk_name} attached', 'Disk attached successfully', 60),
-                ('disk_copying', f'Copying data for disk {disk_name}...', 'Transferring data to storage', 70),
-                ('disk_detecting_type', 'Detected dir storage - direct transfer', 'File-based storage detected', 80),
-                ('disk_downloading', f'Downloading vm-999-disk-{disk_num-1}.qcow2...', 'Download in progress', 85),
-                ('disk_uploading', 'Uploading to destination...', 'Upload in progress', 90),
-                ('disk_copied', f'Disk {disk_name} data copied successfully', 'Data transfer complete', 95),
-            ]
-            
-            for step, message, detail, stage_progress in disk_steps:
-                status = get_migration_status()
-                if not status.get('active'):
-                    break
-                    
-                update_migration_status(step, message=message, details=detail, stage_progress=stage_progress)
-                migration_status['active'] = True  # Keep active flag
-                time.sleep(0.5)  # Faster for disks
-        
-        # Final steps
-        final_steps = [
-            ('network_mapping', 'Applying network interface mappings...', 'Updating network configuration', 50),
-            ('network_applied', 'Network mappings applied successfully', 'Network configured', 100),
-            ('cleanup', 'Cleaning up temporary files...', 'Cleanup in progress', 70),
-            ('completed', 'Migration completed successfully!', 'Migration finished', 100),
-        ]
-        
-        for step, message, detail, stage_progress in final_steps:
-            status = get_migration_status()
-            if not status.get('active'):
-                break
-                
-            update_migration_status(step, message=message, details=detail, stage_progress=stage_progress)
-            migration_status['active'] = True  # Keep active flag
-            time.sleep(0.8)
-        
-        migration_status['active'] = False
-        
-    except Exception as e:
-        migration_status['active'] = False
-        update_migration_status('error', message=f'Test migration failed: {str(e)}')

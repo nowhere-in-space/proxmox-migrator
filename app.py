@@ -13,7 +13,7 @@ from config import Config
 from models import db, Cluster, AdminUser
 from auth import login_required, init_admin_user
 from proxmox_client import connect_to_proxmox, get_cluster_overview
-from migration_service import migrate_vm, start_test_migration
+from migration_service import migrate_vm
 from disk_service import get_migration_status
 from utils import format_size, get_vm_info
 
@@ -154,12 +154,19 @@ def change_password():
 @login_required
 def add_cluster():
     if request.method == 'POST':
+        ssh_port = request.form.get('ssh_port', '22')
+        try:
+            ssh_port = int(ssh_port)
+        except ValueError:
+            ssh_port = 22
+            
         cluster = Cluster(
             name=request.form['name'],
             api_host=request.form['api_host'],
             api_token_id=request.form['api_token_id'],
             api_token_secret=request.form['api_token_secret'],
-            ssh_password=request.form['ssh_password']
+            ssh_password=request.form['ssh_password'],
+            ssh_port=ssh_port
         )
         
         try:
@@ -388,23 +395,6 @@ def cancel_migration():
         error_msg = f"Error cancelling migration: {str(e)}"
         app.logger.error(error_msg)
         return jsonify({'status': 'error', 'message': error_msg}), 500
-
-@app.route('/test-migration', methods=['POST'])
-@login_required
-def test_migration():
-    """Test endpoint to simulate migration for demo purposes"""
-    # Start test migration with app context
-    import threading
-    
-    def test_migration_with_context():
-        with app.app_context():
-            start_test_migration()
-    
-    thread = threading.Thread(target=test_migration_with_context)
-    thread.daemon = True
-    thread.start()
-    
-    return jsonify({'status': 'success', 'message': 'Test migration started'})
 
 @app.route('/migrate', methods=['POST'])
 @login_required

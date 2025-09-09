@@ -37,6 +37,11 @@
                 <label for="ssh_password" class="form-label">Root SSH Password</label>
                 <input type="password" class="form-control" id="ssh_password" name="ssh_password" required>
             </div>
+            <div class="mb-3">
+                <label for="ssh_port" class="form-label">SSH Port</label>
+                <input type="number" class="form-control" id="ssh_port" name="ssh_port" value="22" min="1" max="65535" required>
+                <div class="form-text">Default SSH port is 22. Change if your node uses a custom SSH port.</div>
+            </div>
             <button type="submit" class="btn btn-primary">Add Cluster</button>
         </form>
     </div>

@@ -244,7 +244,6 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="button" class="btn btn-warning" id="testMigrationBtn" onclick="testMigration()">Test Migration UI</button>
                     <button type="button" class="btn btn-primary" id="startMigrationBtn" onclick="startMigration()" disabled>Start Migration</button>
                 </div>
             </div>
@@ -343,19 +342,31 @@
                     const diskConfigurations = {};
                     
                     Object.keys(config).forEach(key => {
-                        if ((key.startsWith('scsi') || key.startsWith('virtio') || key.startsWith('ide') || key.startsWith('sata')) && config[key] && config[key].includes(':')) {
+                        // Include standard data disks plus EFI / TPM state disks
+                        if ((key.startsWith('scsi') || key.startsWith('virtio') || key.startsWith('ide') || key.startsWith('sata') || key.startsWith('efidisk') || key.startsWith('tpmstate')) && config[key] && config[key].includes(':')) {
                             const diskConfig = config[key];
                             // Skip CD-ROM drives
                             if (!diskConfig.includes('media=cdrom') && !diskConfig.includes('.iso')) {
                                 const storageMatch = diskConfig.match(/^([^:]+):/);
                                 let sizeMatch = diskConfig.match(/size=([^,]+)/);
                                 
+                                // For special disks, also show special attributes
+                                let specialInfo = '';
+                                if (key.startsWith('efidisk')) {
+                                    const efitypeMatch = diskConfig.match(/efitype=([^,]+)/);
+                                    if (efitypeMatch) specialInfo = ` (EFI ${efitypeMatch[1]})`;
+                                } else if (key.startsWith('tpmstate')) {
+                                    const versionMatch = diskConfig.match(/version=([^,]+)/);
+                                    if (versionMatch) specialInfo = ` (TPM ${versionMatch[1]})`;
+                                }
+                                
                                 if (storageMatch) {
                                     diskConfigurations[key] = {
                                         disk: key,
                                         currentStorage: storageMatch[1],
                                         size: sizeMatch ? sizeMatch[1] : 'Unknown',
-                                        config: diskConfig
+                                        config: diskConfig,
+                                        specialInfo: specialInfo
                                     };
                                 }
                             }
@@ -389,11 +400,23 @@
             Object.values(window.sourceDisks).forEach(diskInfo => {
                 const mappingDiv = document.createElement('div');
                 mappingDiv.className = 'row mb-2 align-items-center';
+                
+                // Add special styling for EFI/TPM disks
+                let diskTypeClass = '';
+                let diskTypeLabel = '';
+                if (diskInfo.disk.startsWith('efidisk')) {
+                    diskTypeClass = 'text-warning';
+                    diskTypeLabel = ' <span class="badge bg-warning text-dark">EFI</span>';
+                } else if (diskInfo.disk.startsWith('tpmstate')) {
+                    diskTypeClass = 'text-info';
+                    diskTypeLabel = ' <span class="badge bg-info">TPM</span>';
+                }
+                
                 mappingDiv.innerHTML = `
                     <div class="col-md-4">
-                        <label class="form-label">${diskInfo.disk}</label>
+                        <label class="form-label ${diskTypeClass}">${diskInfo.disk}${diskTypeLabel}</label>
                         <small class="text-muted d-block">Current: ${diskInfo.currentStorage}</small>
-                        <small class="text-muted d-block">Size: ${diskInfo.size}</small>
+                        <small class="text-muted d-block">Size: ${diskInfo.size}${diskInfo.specialInfo || ''}</small>
                     </div>
                     <div class="col-md-6">
                         <select class="form-select storage-mapping" data-disk="${diskInfo.disk}" required>
@@ -594,70 +617,44 @@
             validateMigrationForm();
         }
 
-        function testMigration() {
-            const form = document.getElementById('migrationForm');
-            const progressDiv = document.getElementById('migrationProgress');
-            
-            // Hide form and show progress
-            form.style.display = 'none';
-            progressDiv.style.display = 'block';
-            
-            // Hide cancel and test buttons during migration
-            document.querySelector('.btn-secondary').style.display = 'none';
-            document.querySelector('.btn-warning').style.display = 'none';
-            
-            // Initialize progress monitoring
-            initProgressMonitoring();
-
-            // Start test migration
-            fetch('/test-migration', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({})
-            })
-            .then(response => response.json())
-            .then(result => {
-                if (result.status === 'success') {
-                    // Test migration started, monitoring will handle the rest
-                    console.log('Test migration started');
-                } else {
-                    // Show error and return to form
-                    updateProgress(0, 'error', 'Test migration failed: ' + result.message, 'Error occurred');
-                    setTimeout(() => {
-                        form.style.display = 'block';
-                        progressDiv.style.display = 'none';
-                        document.querySelector('.btn-secondary').style.display = 'inline-block';
-                        document.querySelector('.btn-warning').style.display = 'inline-block';
-                    }, 2000);
-                }
-            })
-            .catch(error => {
-                console.error('Error starting test migration:', error);
-                updateProgress(0, 'error', 'Failed to start test migration', 'Error occurred');
-                setTimeout(() => {
-                    form.style.display = 'block';
-                    progressDiv.style.display = 'none';
-                    document.querySelector('.btn-secondary').style.display = 'inline-block';
-                    document.querySelector('.btn-warning').style.display = 'inline-block';
-                }, 2000);
-            });
-        }
         
         function resetMigrationUI() {
             const form = document.getElementById('migrationForm');
             const progressDiv = document.getElementById('migrationProgress');
+            const startButton = document.getElementById('startMigrationBtn');
             
             form.style.display = 'block';
             progressDiv.style.display = 'none';
             document.querySelector('.btn-secondary').style.display = 'inline-block';
-            document.querySelector('.btn-warning').style.display = 'inline-block';
+            
+            // Reset button state
+            startButton.textContent = 'Start Migration';
+            startButton.disabled = false;
+            startButton.classList.remove('btn-warning');
+            startButton.classList.add('btn-primary');
+        }
+        
+        function resetMigrationUIAfterError() {
+            setTimeout(() => {
+                resetMigrationUI();
+            }, 2000);
+        }
+        
+        function clearMigrationLog() {
+            const logDiv = document.getElementById('migrationLog');
+            logDiv.innerHTML = '<div class="text-muted">Migration log will appear here...</div>';
         }
         
         function startMigration() {
             const form = document.getElementById('migrationForm');
             const progressDiv = document.getElementById('migrationProgress');
+            const startButton = document.getElementById('startMigrationBtn');
+            
+            // Update button state
+            startButton.textContent = 'Migration in Progress...';
+            startButton.disabled = true;
+            startButton.classList.remove('btn-primary');
+            startButton.classList.add('btn-warning');
             
             // Collect storage mappings
             const storageMappings = {};
@@ -697,6 +694,9 @@
             // Hide cancel button during migration
             document.querySelector('.btn-secondary').style.display = 'none';
             
+            // Clear migration log
+            clearMigrationLog();
+            
             // Initialize progress monitoring
             initProgressMonitoring();
 
@@ -715,21 +715,13 @@
                     console.log('Migration started successfully');
                 } else {
                     updateProgress(0, 'error', 'Migration failed: ' + result.message, 'Error occurred');
-                    setTimeout(() => {
-                        form.style.display = 'block';
-                        progressDiv.style.display = 'none';
-                        document.querySelector('.btn-secondary').style.display = 'inline-block';
-                    }, 2000);
+                    resetMigrationUIAfterError();
                 }
             })
             .catch(error => {
                 console.error('Error starting migration:', error);
                 updateProgress(0, 'error', 'Failed to start migration', 'Error occurred');
-                setTimeout(() => {
-                    form.style.display = 'block';
-                    progressDiv.style.display = 'none';
-                    document.querySelector('.btn-secondary').style.display = 'inline-block';
-                }, 2000);
+                resetMigrationUIAfterError();
             });
         }
         
@@ -753,10 +745,9 @@
                             hideDiskTransferProgress();
                         }
                         
-                        // Add details to log if available
+                        // Update migration log with current migration entries
                         if (status.details && status.details.length > 0) {
-                            const lastDetail = status.details[status.details.length - 1];
-                            addToMigrationLog(lastDetail.timestamp, lastDetail.message);
+                            updateMigrationLog(status.details);
                         }
                         
                         // Stop polling if migration is complete or failed
@@ -826,6 +817,9 @@
         }
         
         function updateProgress(progress, step, message, logMessage, vmid) {
+            // Ensure progress is an integer
+            progress = Math.round(progress);
+            
             // Update progress bar
             const progressBar = document.getElementById('migrationProgressBar');
             progressBar.style.width = progress + '%';
@@ -881,8 +875,42 @@
             // Auto-scroll to bottom
             logDiv.scrollTop = logDiv.scrollHeight;
             
-            // Limit log entries to last 20
-            while (logDiv.children.length > 20) {
+            // Limit log entries to last 30
+            while (logDiv.children.length > 30) {
+                logDiv.removeChild(logDiv.firstChild);
+            }
+        }
+        
+        function updateMigrationLog(logEntries) {
+            const logDiv = document.getElementById('migrationLog');
+            
+            // Clear initial message if this is the first real log entry
+            if (logDiv.children.length === 1 && logDiv.children[0].classList.contains('text-muted')) {
+                logDiv.innerHTML = '';
+            }
+            
+            // Get current number of log entries displayed
+            const currentCount = logDiv.children.length;
+            
+            // Add only new entries (those beyond current count)
+            for (let i = currentCount; i < logEntries.length; i++) {
+                const entry = logEntries[i];
+                const logEntryDiv = document.createElement('div');
+                logEntryDiv.className = 'mb-1';
+                logEntryDiv.innerHTML = `
+                    <small class="text-muted">${entry.timestamp}</small><br>
+                    <span>${entry.message}</span>
+                `;
+                logDiv.appendChild(logEntryDiv);
+            }
+            
+            // Auto-scroll to bottom only if new entries were added
+            if (logEntries.length > currentCount) {
+                logDiv.scrollTop = logDiv.scrollHeight;
+            }
+            
+            // Limit total entries to last 50
+            while (logDiv.children.length > 50) {
                 logDiv.removeChild(logDiv.firstChild);
             }
         }
