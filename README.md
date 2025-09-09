@@ -1,4 +1,4 @@
-# Proxmox VM Migration Tool
+# Proxmox VM Migration Tool [non-production use only]
 
 Web application for migrating virtual machines between Proxmox VE clusters.
 
