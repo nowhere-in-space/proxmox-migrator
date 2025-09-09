@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, session
+from flask import Flask, render_template, request, jsonify, flash, redirect, url_for, session, send_from_directory
 import logging
 import json
 from datetime import datetime
@@ -60,6 +60,10 @@ def init_db():
 
 # Initialize database
 init_db()
+
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(app.template_folder, 'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
 @app.route('/')
 @login_required
