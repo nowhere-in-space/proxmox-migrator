@@ -25,6 +25,7 @@ This tool allows you to migrate virtual machines between different Proxmox clust
 - Python 3.8+
 - SSH access to Proxmox VE clusters
 - Web browser for interface access
+- Enough free space for vm disks cache
 
 ## Installation
 
