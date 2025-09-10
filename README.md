@@ -213,8 +213,4 @@ For development, it is recommended to:
 
 ## License
 
-This project use Apache-2.0 license.
-
-## Support
-
-If you have questions or issues, contact the development team.
+This project use MIT License.
