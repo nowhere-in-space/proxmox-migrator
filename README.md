@@ -26,6 +26,7 @@ This tool allows you to migrate virtual machines between different Proxmox clust
 - SSH access to Proxmox VE clusters
 - Web browser for interface access
 - Enough free space for vm disks cache
+- Tested on Proxmox VE 8.4.9. Based on API reference, all 8.X versions are supported. 
 
 ## Installation
 
